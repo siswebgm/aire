@@ -1,0 +1,132 @@
+-- =============================================
+-- DADOS DE TESTE - TABELAS gvt_* (schema public)
+-- Execute APÓS criar as tabelas (criar_tabelas_public.sql)
+-- =============================================
+
+-- 1. CRIAR CONDOMÍNIOS
+-- =============================================
+INSERT INTO gvt_condominios (uid, nome, documento, descricao) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'Condomínio Central', '12.345.678/0001-01', 'Edifício principal no centro'),
+  ('22222222-2222-2222-2222-222222222222', 'Residencial Park', '12.345.678/0001-02', 'Condomínio residencial zona sul'),
+  ('33333333-3333-3333-3333-333333333333', 'Empresarial Tower', '12.345.678/0001-03', 'Prédio comercial')
+ON CONFLICT (uid) DO NOTHING;
+
+-- 2. CRIAR GAVETEIROS
+-- =============================================
+
+-- Gaveteiros do Condomínio Central
+INSERT INTO gvt_gaveteiros (uid, condominio_uid, nome, codigo_hardware, descricao) VALUES
+  ('aaaa1111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Portaria Principal', 'ESP32-PORT-001', 'Gaveteiro na portaria principal'),
+  ('aaaa2222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'Hall Elevadores', 'ESP32-HALL-001', 'Gaveteiro no hall dos elevadores')
+ON CONFLICT (uid) DO NOTHING;
+
+-- Gaveteiros do Residencial Park
+INSERT INTO gvt_gaveteiros (uid, condominio_uid, nome, codigo_hardware, descricao) VALUES
+  ('bbbb1111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 'Guarita Entrada', 'ESP32-GUA-001', 'Gaveteiro na guarita de entrada'),
+  ('bbbb2222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Área de Lazer', 'ESP32-LAZ-001', 'Gaveteiro na área de lazer')
+ON CONFLICT (uid) DO NOTHING;
+
+-- Gaveteiros do Empresarial Tower
+INSERT INTO gvt_gaveteiros (uid, condominio_uid, nome, codigo_hardware, descricao) VALUES
+  ('cccc1111-1111-1111-1111-111111111111', '33333333-3333-3333-3333-333333333333', 'Recepção Térreo', 'ESP32-REC-001', 'Gaveteiro na recepção do térreo'),
+  ('cccc2222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333', 'Sala de Encomendas', 'ESP32-ENC-001', 'Gaveteiro na sala de encomendas')
+ON CONFLICT (uid) DO NOTHING;
+
+-- 3. CRIAR PORTAS
+-- =============================================
+
+-- Portaria Principal (Condomínio Central) - 8 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 1, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 2, 'OCUPADO', NOW() - INTERVAL '2 hours'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 3, 'OCUPADO', NOW() - INTERVAL '30 minutes'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 4, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 5, 'BAIXADO', NOW() - INTERVAL '1 day'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 6, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 7, 'AGUARDANDO_RETIRADA', NOW() - INTERVAL '45 minutes'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa1111-1111-1111-1111-111111111111', 8, 'DISPONIVEL', NULL)
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- Hall Elevadores (Condomínio Central) - 6 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 1, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 2, 'OCUPADO', NOW() - INTERVAL '5 hours'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 3, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 4, 'OCUPADO', NOW() - INTERVAL '15 minutes'),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 5, 'DISPONIVEL', NULL),
+  ('11111111-1111-1111-1111-111111111111', 'aaaa2222-2222-2222-2222-222222222222', 6, 'BAIXADO', NOW() - INTERVAL '3 hours')
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- Guarita Entrada (Residencial Park) - 10 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 1, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 2, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 3, 'OCUPADO', NOW() - INTERVAL '1 hour'),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 4, 'OCUPADO', NOW() - INTERVAL '20 minutes'),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 5, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 6, 'OCUPADO', NOW() - INTERVAL '4 hours'),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 7, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 8, 'AGUARDANDO_RETIRADA', NOW() - INTERVAL '10 minutes'),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 9, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb1111-1111-1111-1111-111111111111', 10, 'BAIXADO', NOW() - INTERVAL '6 hours')
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- Área de Lazer (Residencial Park) - 4 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('22222222-2222-2222-2222-222222222222', 'bbbb2222-2222-2222-2222-222222222222', 1, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb2222-2222-2222-2222-222222222222', 2, 'OCUPADO', NOW() - INTERVAL '45 minutes'),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb2222-2222-2222-2222-222222222222', 3, 'DISPONIVEL', NULL),
+  ('22222222-2222-2222-2222-222222222222', 'bbbb2222-2222-2222-2222-222222222222', 4, 'DISPONIVEL', NULL)
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- Recepção Térreo (Empresarial Tower) - 12 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 1, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 2, 'OCUPADO', NOW() - INTERVAL '3 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 3, 'OCUPADO', NOW() - INTERVAL '1 hour'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 4, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 5, 'OCUPADO', NOW() - INTERVAL '30 minutes'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 6, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 7, 'BAIXADO', NOW() - INTERVAL '2 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 8, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 9, 'OCUPADO', NOW() - INTERVAL '4 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 10, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 11, 'AGUARDANDO_RETIRADA', NOW() - INTERVAL '25 minutes'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc1111-1111-1111-1111-111111111111', 12, 'DISPONIVEL', NULL)
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- Sala de Encomendas (Empresarial Tower) - 8 portas
+INSERT INTO gvt_portas (condominio_uid, gaveteiro_uid, numero_porta, status_atual, ocupado_em) VALUES
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 1, 'OCUPADO', NOW() - INTERVAL '8 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 2, 'OCUPADO', NOW() - INTERVAL '6 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 3, 'OCUPADO', NOW() - INTERVAL '2 hours'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 4, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 5, 'OCUPADO', NOW() - INTERVAL '1 hour'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 6, 'BAIXADO', NOW() - INTERVAL '30 minutes'),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 7, 'DISPONIVEL', NULL),
+  ('33333333-3333-3333-3333-333333333333', 'cccc2222-2222-2222-2222-222222222222', 8, 'OCUPADO', NOW() - INTERVAL '45 minutes')
+ON CONFLICT (gaveteiro_uid, numero_porta) DO NOTHING;
+
+-- 4. ATUALIZAR finalizado_em PARA PORTAS BAIXADAS
+-- =============================================
+UPDATE gvt_portas
+SET finalizado_em = ocupado_em + INTERVAL '1 hour'
+WHERE status_atual = 'BAIXADO'
+  AND finalizado_em IS NULL;
+
+-- =============================================
+-- VERIFICAÇÃO
+-- =============================================
+SELECT 
+  c.nome AS condominio,
+  g.nome AS gaveteiro,
+  COUNT(*) AS total_portas,
+  COUNT(*) FILTER (WHERE p.status_atual = 'DISPONIVEL') AS disponiveis,
+  COUNT(*) FILTER (WHERE p.status_atual = 'OCUPADO') AS ocupadas,
+  COUNT(*) FILTER (WHERE p.status_atual = 'BAIXADO') AS baixadas,
+  COUNT(*) FILTER (WHERE p.status_atual = 'AGUARDANDO_RETIRADA') AS aguardando
+FROM gvt_condominios c
+JOIN gvt_gaveteiros g ON g.condominio_uid = c.uid
+JOIN gvt_portas p ON p.gaveteiro_uid = g.uid
+GROUP BY c.nome, g.nome
+ORDER BY c.nome, g.nome;
