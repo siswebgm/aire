@@ -1484,14 +1484,14 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
                 <button
                   onClick={etapa === 'selecionar_porta' ? confirmarOcupacao : irParaSelecaoPorta}
                   disabled={etapa === 'selecionar_porta' && !portaSelecionada}
-                  className={`col-span-1 py-3 sm:py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-2 text-sm sm:text-base whitespace-nowrap ${
+                  className={`col-span-1 px-4 sm:px-3 py-3 sm:py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-2 text-sm sm:text-base whitespace-nowrap ${
                     etapa === 'selecionar_porta' && !portaSelecionada
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       : 'bg-green-500 text-white hover:bg-green-600'
                   }`}
                 >
                   {etapa === 'selecionar_porta' ? (
-                    <><CheckCircle2 size={18} />Confirmar</>
+                    <>Confirmar</>
                   ) : (
                     <><ArrowRight size={18} />Porta</>
                   )}

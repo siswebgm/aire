@@ -430,9 +430,7 @@ export default function AbrirPortaPublico() {
 
   return (
     <div
-      className={`min-h-screen bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex justify-center p-3 ${
-        isKiosk ? 'pt-8 items-start' : 'items-center'
-      }`}
+      className="min-h-screen bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex items-center justify-center p-3"
     >
       <div
         className={`w-full ${
