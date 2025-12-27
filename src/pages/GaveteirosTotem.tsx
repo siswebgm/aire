@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useRouter } from 'next/router'
 import { 
   Package, 
   Loader2, 
   DoorOpen, 
   CheckCircle2, 
   XCircle, 
+  X,
   ChevronRight,
   ChevronLeft,
   Home,
@@ -21,7 +23,8 @@ import {
   Inbox,
   Maximize2,
   Minimize2,
-  ShoppingCart
+  ShoppingCart,
+  ArrowRight
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -48,16 +51,42 @@ interface DestinatarioItem {
 
 export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' | 'kiosk' }) {
   const { usuario, condominio, logout } = useAuth()
-  const navigate = useNavigate()
+  
+  // Try to get Next.js router first (for Next.js pages)
+  let nextRouter = null
+  try {
+    nextRouter = useRouter()
+  } catch (e) {
+    // Not in Next.js environment
+  }
+  
+  // Try to get React Router navigate function
+  let reactNavigate = null
+  try {
+    reactNavigate = useNavigate()
+  } catch (e) {
+    // Not in React Router environment
+  }
+  
+  // Create a unified navigate function that works in both environments
+  const navigate = (path: string) => {
+    if (reactNavigate) {
+      reactNavigate(path)
+    } else if (nextRouter && typeof nextRouter.push === 'function') {
+      nextRouter.push(path)
+    } else {
+      console.warn('No router available for navigation')
+    }
+  }
   const isKiosk = mode === 'kiosk'
   const embeddedBleedClass = isKiosk
     ? ''
     : '-m-4 sm:-m-6 w-[calc(100%+2rem)] sm:w-[calc(100%+3rem)] max-w-none'
   const KIOSK_IDLE_MS = 2 * 60 * 1000
   const KIOSK_SLIDE_INTERVAL_MS = 12_000
-  const KIOSK_SCREENSAVER_VIDEO_URL = (import.meta as any).env?.VITE_KIOSK_SCREENSAVER_VIDEO_URL as string | undefined
-  const KIOSK_SCREENSAVER_IMAGE_URL = (import.meta as any).env?.VITE_KIOSK_SCREENSAVER_IMAGE_URL as string | undefined
-  const KIOSK_MANUFACTURER_LOGO_URL = (import.meta as any).env?.VITE_KIOSK_MANUFACTURER_LOGO_URL as string | undefined
+  const KIOSK_SCREENSAVER_VIDEO_URL = process.env.NEXT_PUBLIC_KIOSK_SCREENSAVER_VIDEO_URL as string | undefined
+  const KIOSK_SCREENSAVER_IMAGE_URL = process.env.NEXT_PUBLIC_KIOSK_SCREENSAVER_IMAGE_URL as string | undefined
+  const KIOSK_MANUFACTURER_LOGO_URL = process.env.NEXT_PUBLIC_KIOSK_MANUFACTURER_LOGO_URL as string | undefined
   const kioskSlides = [
     {
       variant: 'brand',
@@ -808,14 +837,14 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
         observacao: `Ocupação via Totem - ${totalEncomendas} encomenda(s)`
       })
 
-      // Abrir porta física via proxy Vite (evita CORS)
-      // Proxy configurado em vite.config.ts: /esp32 -> http://192.168.1.73
+      // Abrir porta física via proxy Next.js (evita CORS)
+      // Proxy configurado em next.config.js: /esp32 -> http://192.168.1.73
       console.log('[ESP32] Abrindo porta via proxy:', portaSelecionada.numero_porta)
       
       try {
         await abrirPortaEsp32({
-          baseUrl: '/esp32',  // Usa proxy do Vite
-          token: 'teste',
+          baseUrl: '/esp32',  // Usa proxy do Next.js
+          token: process.env.NEXT_PUBLIC_ESP32_DEFAULT_TOKEN || 'teste',
           numeroPorta: portaSelecionada.numero_porta,
           timeoutMs: 10000
         })
@@ -856,7 +885,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   if (loading) {
     return (
       <div
-        className={`${embeddedBleedClass} ${isKiosk ? 'min-h-screen' : 'min-h-[60vh]'} w-full flex items-center justify-center overflow-x-hidden ${
+        className={`${embeddedBleedClass} ${isKiosk ? 'h-screen' : 'h-[60vh]'} w-full flex items-center justify-center overflow-x-hidden ${
           isFullscreen || isKiosk ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900' : 'bg-slate-50'
         }`}
       >
@@ -871,7 +900,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   return (
     <div
       ref={fullscreenTargetRef}
-      className={`${embeddedBleedClass} min-h-screen ${isKiosk ? (etapa === 'inicio' ? 'p-0' : 'p-4') : 'p-4'} flex flex-col overflow-x-hidden ${
+      className={`${embeddedBleedClass} h-screen ${isKiosk ? (etapa === 'inicio' ? 'p-0' : 'p-4') : 'p-4'} flex flex-col overflow-x-hidden ${
         isFullscreen || isKiosk ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900' : 'bg-slate-50'
       }`}
     >
@@ -1022,22 +1051,38 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
       )}
       {etapa === 'inicio' ? (
         <div className="flex-1 min-h-0 w-full flex items-center justify-center bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900">
-          <div className="w-full max-w-4xl bg-white rounded-3xl border border-slate-200 shadow-xl p-6 sm:p-10">
+          <div className="w-[calc(100%-3rem)] sm:w-full max-w-4xl bg-white rounded-3xl border border-slate-200 shadow-xl p-6 sm:p-10">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="text-xs font-bold tracking-widest text-slate-400">AIRE</div>
                 <div className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">Selecione uma opção</div>
                 <div className="mt-1 text-sm sm:text-base text-slate-500 font-semibold">Entregar uma encomenda ou retirar com senha</div>
               </div>
-              <button
-                type="button"
-                onClick={toggleFullscreen}
-                className="inline-flex items-center justify-center w-10 h-10 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-                aria-label={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-              >
-                {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-              </button>
+              <div className="flex items-center gap-2">
+                {usuario && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await logout()
+                      window.location.href = '/login'
+                    }}
+                    className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    title="Sair do sistema"
+                    aria-label="Sair do sistema"
+                  >
+                    <LogOut size={16} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                  title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                  aria-label={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                >
+                  {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                </button>
+              </div>
             </div>
 
             <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
@@ -1073,19 +1118,38 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
                 </div>
               </button>
             </div>
+
+            {/* Usuário e condomínio abaixo dos cards */}
+            {usuario && (
+              <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-4 border-t border-slate-200">
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-slate-400" />
+                  <span className="text-sm text-slate-600 font-medium">
+                    {usuario.nome || usuario.email}
+                  </span>
+                </div>
+                {condominio && (
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-slate-400" />
+                    <span className="text-sm text-slate-600 font-medium">
+                      {condominio.nome}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       ) : (
-        <>
+          <div className="flex-1 min-h-0 flex flex-col">
           {/* Header com título e passos na mesma linha */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="bg-sky-50 rounded-xl p-2">
-                <Package className="w-6 h-6 text-sky-600" />
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 bg-white border border-slate-200 rounded-2xl p-3 sm:px-4 sm:py-3 shadow-sm">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="bg-sky-50 rounded-xl p-2 flex-shrink-0">
+                <Package className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
               </div>
-              <div>
-                <h1 className="text-lg font-extrabold text-slate-900">Depositar Encomenda</h1>
-                <p className="text-slate-500 text-xs">{headerSubtitle}</p>
+              <div className="min-w-0 flex-1">
+                <div className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 truncate">{headerSubtitle}</div>
               </div>
             </div>
 
@@ -1186,9 +1250,65 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
 
           {/* Layout principal com carrinho */}
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4">
-        {/* Carrinho lateral */}
-        {destinatarios.length > 0 && etapa !== 'sucesso' && etapa !== 'erro' && (
-          <div className="w-full lg:w-64 lg:shrink-0 bg-white rounded-2xl shadow-xl p-4 flex flex-col">
+
+        {/* Carrinho lateral - mobile first */}
+        {destinatarios.length > 0 && etapa !== 'sucesso' && etapa !== 'erro' && etapa !== 'confirmando' && (
+          <div className="lg:hidden order-2 bg-white rounded-2xl shadow-xl p-4">
+            <div className="pb-3 mb-3 border-b border-gray-100">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <ShoppingCart className="w-5 h-5 text-sky-600" />
+                    <h3 className="text-lg font-extrabold text-gray-900 leading-tight">Carrinho</h3>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">Destinos selecionados</p>
+                </div>
+                <span className="bg-sky-100 text-sky-700 text-xs font-bold px-2 py-1 rounded-full">
+                  {totalEncomendas}
+                </span>
+              </div>
+            </div>
+            
+            {/* Lista simplificada para mobile */}
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {(() => {
+                const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
+                return blocosUnicos.map(bloco => {
+                  const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
+                  const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
+                  return (
+                    <div
+                      key={bloco}
+                      className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-200"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Building2 className="w-4 h-4 text-sky-500" />
+                        <span className="font-extrabold text-gray-900 text-sm">{bloco}</span>
+                        <span className="text-xs text-gray-500">({aptosDoBloco.length} aptos)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-sky-100 text-sky-700 text-xs font-bold px-2 py-1 rounded-full">
+                          {totalBloco}
+                        </span>
+                        <button
+                          onClick={() => removerBlocoDoCarrinho(bloco)}
+                          className="text-red-500 hover:bg-red-50 p-1 rounded"
+                          title="Remover bloco"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* Carrinho desktop */}
+        {destinatarios.length > 0 && etapa !== 'sucesso' && etapa !== 'erro' && etapa !== 'confirmando' && (
+          <div className="hidden lg:block lg:w-64 lg:shrink-0 bg-white rounded-2xl shadow-xl p-4 flex flex-col order-last min-h-0 h-full overflow-y-auto">
             <div className="pb-3 mb-3 border-b border-gray-100">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1205,9 +1325,9 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
             </div>
             
             {/* Lista agrupada por bloco */}
-            <div className="flex-1 overflow-y-auto space-y-3">
+            <div className="space-y-3 pb-3">
               {(() => {
-                const blocosUnicos = [...new Set(destinatarios.map(d => d.bloco))]
+                const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
                 return blocosUnicos.map(bloco => {
                   const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
                   const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
@@ -1364,18 +1484,21 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
                 <button
                   onClick={etapa === 'selecionar_porta' ? confirmarOcupacao : irParaSelecaoPorta}
                   disabled={etapa === 'selecionar_porta' && !portaSelecionada}
-                  className={`col-span-2 sm:col-span-1 py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-2 text-sm ${
+                  className={`col-span-1 py-3 sm:py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-2 text-sm sm:text-base whitespace-nowrap ${
                     etapa === 'selecionar_porta' && !portaSelecionada
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       : 'bg-green-500 text-white hover:bg-green-600'
                   }`}
                 >
-                  <DoorOpen className="w-4 h-4" />
-                  {etapa === 'selecionar_porta' ? 'Confirmar' : 'Gaveteiro'}
+                  {etapa === 'selecionar_porta' ? (
+                    <><CheckCircle2 size={18} />Confirmar</>
+                  ) : (
+                    <><ArrowRight size={18} />Porta</>
+                  )}
                 </button>
                 <button
                   onClick={reiniciar}
-                  className="col-span-2 sm:col-span-1 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50 text-sm font-semibold transition-colors"
+                  className="col-span-1 py-3 sm:py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50 text-sm sm:text-base font-semibold transition-colors whitespace-nowrap"
                 >
                   Limpar
                 </button>
@@ -1400,7 +1523,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
               </div>
             </div>
             {/* Grid de blocos */}
-            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2 flex-1 content-start">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2 flex-1 content-start">
               {blocos.map((bloco) => (
                 (() => {
                   const blocoJaNoCarrinho = blocosNoCarrinho.has(bloco.nome)
@@ -1450,7 +1573,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
         {/* ETAPA 2: Selecionar Apartamento */}
         {etapa === 'selecionar_apartamento' && (
           <div className="p-4 flex-1 flex flex-col min-h-0">
-            <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center justify-between gap-3 mb-3 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center">
                   <Home className="w-5 h-5 text-sky-600" />
@@ -1475,7 +1598,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
               </button>
             </div>
             
-            {/* Grid de apartamentos */}
+            {/* Grid de apartamentos com scroll */}
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-1.5 pb-2 content-start">
                 {apartamentosPaginados.map((apto) => {
@@ -1527,16 +1650,6 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
                   )
                 })}
 
-                {apartamentosFiltrados.length > 0 &&
-                  apartamentosPaginados.length < aptoPageSize &&
-                  Array.from({ length: aptoPageSize - apartamentosPaginados.length }).map((_, idx) => (
-                    <div
-                      key={`apto-placeholder-${idx}`}
-                      aria-hidden="true"
-                      className="h-[64px] rounded-md border border-slate-100 bg-slate-50/40"
-                    />
-                  ))}
-
                 {apartamentosFiltrados.length === 0 && (
                   <p className="col-span-full text-center text-gray-500 py-8">Nenhum apartamento cadastrado</p>
                 )}
@@ -1544,7 +1657,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
             </div>
             
             {/* Rodapé com ações */}
-            <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="mt-auto pt-4 border-t border-gray-200 flex-shrink-0">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <button
@@ -1593,7 +1706,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
         {/* ETAPA 3: Selecionar Porta */}
         {etapa === 'selecionar_porta' && (
           <div className="p-4 flex flex-col flex-1 min-h-0">
-            <div className="pb-2 mb-2">
+            <div className="pb-2 mb-2 flex-shrink-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -1616,7 +1729,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
             {/* Grid de portas */}
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               <div className="min-h-0 rounded-2xl bg-white border border-slate-200 p-2">
-                <div className="grid gap-2 pb-2 grid-cols-[repeat(auto-fit,minmax(84px,1fr))]">
+                <div className="grid gap-2 pb-2 grid-cols-[repeat(auto-fit,minmax(80px,1fr))] sm:grid-cols-[repeat(auto-fit,minmax(84px,1fr))]">
                 {portasDisponiveisPaginadas.map((porta) => {
                   const selected = portaSelecionada?.uid === porta.uid
                   return (
@@ -1660,7 +1773,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
             </div>
 
             {/* Botão confirmar */}
-            <div className="-mx-4 mt-1 px-4 pt-2 pb-2 bg-white border-t border-gray-100">
+            <div className="-mx-4 mt-auto px-4 pt-2 pb-2 bg-white border-t border-gray-100 flex-shrink-0">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   <select
@@ -1842,10 +1955,10 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
             </button>
           </div>
         )}
-          </div>
+        </div>
         </div>
       </div>
-        </>
+          </div>
       )}
     </div>
   )

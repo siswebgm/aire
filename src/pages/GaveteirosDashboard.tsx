@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useRouter } from 'next/router'
 import { LayoutGrid, Clock, X, AlertCircle, Search, Building2, CheckCircle, XCircle, Users, FileSpreadsheet, RefreshCw } from 'lucide-react'
 import type { Gaveteiro } from '../types/gaveteiro'
 import { listarGaveteiros, listarPortas, listarPortasOcupadas, buscarPorBlocoApartamento, listarBlocos, listarApartamentos, type PortaOcupadaRelatorio, type MovimentacaoBlocoApartamento } from '../services/gaveteiroService'
@@ -54,7 +54,7 @@ function formatarDestinatarios(bloco?: string, apartamento?: string): { bloco: s
 
 export default function GaveteirosDashboard() {
   const { condominio } = useAuth()
-  const navigate = useNavigate()
+  const router = useRouter()
 
   // Estados principais
   const [gaveteiros, setGaveteiros] = useState<Gaveteiro[]>([])

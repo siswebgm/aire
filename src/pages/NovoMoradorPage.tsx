@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useRouter } from 'next/router'
 import { 
   Save, Phone, Building2, Home, UserPlus, Bell, 
   Loader2, AlertCircle, X, Users
@@ -55,7 +55,7 @@ const formVazio = {
 }
 
 export default function NovoMoradorPage() {
-  const navigate = useNavigate()
+  const router = useRouter()
   const { uid } = useParams()
   const { condominio } = useAuth()
   
@@ -207,7 +207,7 @@ export default function NovoMoradorPage() {
         await criarMorador(dadosMorador as any)
       }
 
-      navigate('/moradores')
+      router.push('/moradores')
     } catch (err: any) {
       console.error('Erro ao salvar:', err)
       if (err.code === '23505') {
@@ -461,7 +461,7 @@ export default function NovoMoradorPage() {
 
         <div className="flex items-center justify-end gap-3 p-6 bg-gray-50 border-t">
           <button
-            onClick={() => navigate('/moradores')}
+            onClick={() => router.push('/moradores')}
             className="px-6 py-2.5 text-gray-600 hover:bg-gray-200 rounded-xl transition-colors font-medium"
           >
             Cancelar

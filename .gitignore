@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+.next/
 .vite/
 .cache/
 coverage/
@@ -18,6 +19,8 @@ Thumbs.db
 
 .vscode/
 .idea/
+
+temp_file.txt
 
 *.tsbuildinfo
 

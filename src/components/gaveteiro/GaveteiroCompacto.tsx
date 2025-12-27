@@ -23,8 +23,8 @@ import type { Gaveteiro, Porta, StatusPorta, Bloco, Apartamento } from '../../ty
 import { listarPortas, ocuparPorta, liberarPortaComSenha, cancelarOcupacao, listarBlocos, listarApartamentos, solicitarAberturaPortaIot, aguardarConclusaoComandoIot, buscarUltimoStatusIotPorComando, abrirPortaEsp32, fecharPortaEsp32, atualizarStatusFechaduraPorNumero, atualizarSensorImaPorNumero, type Destinatario, type SenhaDestinatario } from '../../services/gaveteiroService'
 import { supabase } from '../../lib/supabaseClient'
 
-// Token padrão para ESP32 (pode ser sobrescrito pelo banco)
-const ESP32_DEFAULT_TOKEN = 'teste'
+// Token padrão ESP32 (em produção, use variável de ambiente)
+const ESP32_DEFAULT_TOKEN = process.env.NEXT_PUBLIC_ESP32_DEFAULT_TOKEN || null
 
 // Log de versão
 console.log('🟢 [VERSÃO] GaveteiroCompacto v5.0 - IP DINÂMICO POR GAVETEIRO')
@@ -1224,10 +1224,10 @@ export default function GaveteiroCompacto({ gaveteiro, condominioUid }: Gaveteir
   }
 
   // Obter URL base do ESP32 deste gaveteiro
-  // Usa proxy /esp32 para evitar CORS (configurado no vite.config.ts)
+  // Usa proxy /esp32 para evitar CORS (configurado no next.config.js)
   const getEsp32Url = () => {
     if (gaveteiro.esp32_ip) {
-      // Usar proxy do Vite para evitar bloqueio CORS
+      // Usar proxy do Next.js para evitar bloqueio CORS
       return '/esp32'
     }
     return null // Sem IP configurado
@@ -1376,7 +1376,7 @@ export default function GaveteiroCompacto({ gaveteiro, condominioUid }: Gaveteir
             </div>
           </div>
           <button
-            onClick={carregarPortas}
+            onClick={() => carregarPortas()}
             className="p-1.5 rounded-lg hover:bg-white/20 transition-all hover:rotate-180 duration-500"
             title="Atualizar portas"
           >

@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRouter } from 'next/router'
 import { Lock, Mail, Loader2, Eye, EyeOff, Package, Building2, Shield, Clock } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Login() {
-  const navigate = useNavigate()
+  const router = useRouter()
   const { login } = useAuth()
 
   const [email, setEmail] = useState('')
@@ -33,14 +33,14 @@ export default function Login() {
     if (result.success) {
       const savedUser = localStorage.getItem('gvt_usuario')
       const perfil = savedUser ? JSON.parse(savedUser)?.perfil : undefined
-      navigate(perfil === 'KIOSK' ? '/totem-kiosk' : '/')
+      router.push(perfil === 'KIOSK' ? '/totem-kiosk' : '/')
     } else {
       setError(result.error || 'Erro ao fazer login')
     }
   }
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex">
+    <div className="h-screen min-h-0 w-full bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex overflow-hidden">
       {/* Lado Esquerdo - Ilustração */}
       <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
         {/* Círculos decorativos */}
@@ -156,10 +156,10 @@ export default function Login() {
       </div>
 
       {/* Lado Direito - Formulário */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center px-6 py-10 sm:px-10">
+      <div className="w-full lg:w-1/2 flex items-center justify-center px-6 py-6 sm:px-10 min-h-0">
         <div className="w-full max-w-md">
           {/* Logo Mobile */}
-          <div className="lg:hidden text-center mb-8">
+          <div className="lg:hidden text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 backdrop-blur rounded-2xl mb-4 shadow-lg border border-white/15">
               <Building2 size={32} className="text-white" />
             </div>
@@ -168,7 +168,7 @@ export default function Login() {
           </div>
 
           {/* Card de Login */}
-          <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-xl p-8 border border-white/20">
+          <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-xl p-6 sm:p-8 border border-white/20">
             {/* Título */}
             <div className="text-center mb-6">
               <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Bem-vindo!</h1>

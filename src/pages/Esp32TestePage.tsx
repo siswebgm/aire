@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext'
 import type { Porta } from '../types/gaveteiro'
 
-// Usar proxy do Vite (mesma porta 3000)
+// Usar proxy do Next.js (mesma porta 3000)
 const ESP32_PROXY_URL = '/esp32'
 
 type EstadoPorta = 'aberta' | 'fechada' | 'desconhecido'

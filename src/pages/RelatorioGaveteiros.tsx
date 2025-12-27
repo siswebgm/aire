@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { FileSpreadsheet, Download, Clock, Package, DoorOpen, ArrowLeft } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
-import { useNavigate } from 'react-router-dom'
+import { useRouter } from 'next/router'
 
 interface DestinatarioJSON {
   bloco: string
@@ -99,7 +99,7 @@ const formatarDestinatarios = (mov: Movimentacao): string => {
 
 export default function RelatorioGaveteiros() {
   const { condominio } = useAuth()
-  const navigate = useNavigate()
+  const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([])
   const [metricas, setMetricas] = useState<Metricas>({
@@ -214,7 +214,7 @@ export default function RelatorioGaveteiros() {
       {/* Header Responsivo */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
+          <button onClick={() => router.push('/')} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
             <ArrowLeft size={20} />
           </button>
           <div className="min-w-0">

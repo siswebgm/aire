@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import { DoorOpen, Lock, Unlock, CheckCircle2, XCircle, Loader2, Package, KeyRound, Camera } from 'lucide-react'
 import { supabase } from '../lib/supabaseClient'
 import { abrirPortaEsp32 } from '../services/gaveteiroService'
 import { useAuth } from '../contexts/AuthContext'
 
-// Token padrão ESP32
-const ESP32_TOKEN = 'teste'
+// Token padrão ESP32 (em produção, use variável de ambiente)
+const ESP32_TOKEN = process.env.NEXT_PUBLIC_ESP32_DEFAULT_TOKEN || null
 
 interface PortaInfo {
   porta_uid: string
@@ -24,8 +23,6 @@ type MetodoAutenticacao = 'senha' | 'facial'
 type StatusFacial = 'idle' | 'iniciando_camera' | 'camera_pronta' | 'reconhecendo' | 'erro'
 
 export default function AbrirPortaPublico() {
-  const location = useLocation()
-  const navigate = useNavigate()
   const { condominio } = useAuth()
   const [senha, setSenha] = useState('')
   const [showKeypad, setShowKeypad] = useState(false)
@@ -41,7 +38,9 @@ export default function AbrirPortaPublico() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
 
-  const isKiosk = new URLSearchParams(location.search).get('kiosk') === '1'
+  const isKiosk =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('kiosk') === '1'
 
   // Foco automático no input
   useEffect(() => {
@@ -431,26 +430,26 @@ export default function AbrirPortaPublico() {
 
   return (
     <div
-      className={`min-h-screen bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex justify-center p-4 ${
-        isKiosk ? 'pt-10 items-start' : 'items-center'
+      className={`min-h-screen bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex justify-center p-3 ${
+        isKiosk ? 'pt-8 items-start' : 'items-center'
       }`}
     >
       <div
         className={`w-full ${
           showKioskKeypad
-            ? (metodo === 'senha' ? 'max-w-[780px]' : 'max-w-4xl')
+            ? (metodo === 'senha' ? 'max-w-[720px]' : 'max-w-4xl')
             : isKiosk && metodo === 'facial'
               ? 'max-w-3xl'
               : 'max-w-md'
         }`}
       >
         {/* Logo/Header */}
-        <div className="mb-8">
+        <div className="mb-6">
           <div className="text-center">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-white/10 rounded-full mb-4">
-              <Package className="w-10 h-10 text-white" />
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-full mb-3">
+              <Package className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">Retirada de Encomenda</h1>
+            <h1 className="text-2xl font-bold text-white mb-2">Retirada de Encomenda</h1>
             <p className="text-white/70">Digite sua senha para abrir a porta</p>
           </div>
         </div>
@@ -459,17 +458,17 @@ export default function AbrirPortaPublico() {
         <div className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl overflow-hidden">
           {/* Status da Porta - Header com Bloco e Apartamento em destaque */}
           {portaInfo && (
-            <div className="bg-gradient-to-r from-sky-600 to-blue-700 px-6 py-5 text-white">
+            <div className="bg-gradient-to-r from-sky-600 to-blue-700 px-5 py-4 text-white">
               {/* Bloco e Apartamento em destaque */}
-              <div className="flex items-center justify-center gap-4 mb-4">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-6 py-3 text-center">
+              <div className="flex items-center justify-center gap-3 mb-3">
+                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-5 py-2.5 text-center">
                   <p className="text-xs uppercase tracking-wider opacity-80">Bloco</p>
-                  <p className="text-3xl font-bold">{portaInfo.bloco}</p>
+                  <p className="text-2xl font-bold">{portaInfo.bloco}</p>
                 </div>
-                <div className="text-4xl font-light opacity-50">•</div>
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-6 py-3 text-center">
+                <div className="text-3xl font-light opacity-50">•</div>
+                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-5 py-2.5 text-center">
                   <p className="text-xs uppercase tracking-wider opacity-80">Apartamento</p>
-                  <p className="text-3xl font-bold">{portaInfo.apartamento}</p>
+                  <p className="text-2xl font-bold">{portaInfo.apartamento}</p>
                 </div>
               </div>
               {/* Porta */}
@@ -485,12 +484,12 @@ export default function AbrirPortaPublico() {
           <div
             className={
               showKioskKeypad
-                ? 'grid items-stretch justify-center grid-cols-1 lg:grid-cols-[420px_360px] divide-y divide-slate-200 lg:divide-y-0 lg:divide-x'
+                ? 'grid items-stretch justify-center grid-cols-1 lg:grid-cols-[380px_320px] divide-y divide-slate-200 lg:divide-y-0 lg:divide-x'
                 : ''
             }
           >
             <div
-              className={`${isKiosk && metodo === 'facial' && !showKioskKeypad ? 'p-6' : 'p-8'} ${
+              className={`${isKiosk && metodo === 'facial' && !showKioskKeypad ? 'p-5' : 'p-6'} ${
                 showKioskKeypad && metodo === 'senha' ? 'flex flex-col' : ''
               }`}
             >
@@ -619,7 +618,9 @@ export default function AbrirPortaPublico() {
                         <div className="inline-flex items-center rounded-2xl bg-slate-100 p-1 border border-slate-200">
                           <button
                             type="button"
-                            onClick={() => navigate('/totem-kiosk')}
+                            onClick={() => {
+                              window.location.href = '/totem-kiosk'
+                            }}
                             disabled={kioskSenhaProcessando}
                             className={`h-11 px-7 rounded-xl text-slate-600 hover:text-sky-700 hover:bg-white/80 text-sm font-extrabold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
                           >
@@ -653,7 +654,9 @@ export default function AbrirPortaPublico() {
                         <div className="inline-flex items-center rounded-2xl bg-slate-100 p-1 border border-slate-200">
                           <button
                             type="button"
-                            onClick={() => navigate('/totem-kiosk')}
+                            onClick={() => {
+                              window.location.href = '/totem-kiosk'
+                            }}
                             className="h-10 px-6 rounded-xl text-slate-600 hover:text-sky-700 hover:bg-white/80 text-sm font-extrabold transition-colors"
                           >
                             Entregar
