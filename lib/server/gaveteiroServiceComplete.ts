@@ -318,21 +318,86 @@ export async function listarBlocos(condominioUid: string): Promise<Bloco[]> {
   return data || []
 }
 
+export async function criarBloco(bloco: Omit<Bloco, 'uid' | 'created_at' | 'updated_at'>): Promise<Bloco> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.blocos)
+    .insert(bloco)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function atualizarBloco(uid: string, bloco: Partial<Bloco>): Promise<Bloco> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.blocos)
+    .update({ ...bloco, updated_at: new Date().toISOString() })
+    .eq('uid', uid)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function excluirBloco(uid: string): Promise<void> {
+  const { error } = await supabaseServer
+    .from(TABLES.blocos)
+    .update({ ativo: false })
+    .eq('uid', uid)
+
+  if (error) throw error
+}
+
 export async function listarApartamentos(condominioUid: string, blocoUid?: string): Promise<Apartamento[]> {
   let query = supabaseServer
     .from(TABLES.apartamentos)
     .select('*, bloco:gvt_blocos(*)')
     .eq('condominio_uid', condominioUid)
     .eq('ativo', true)
-
+  
   if (blocoUid) {
     query = query.eq('bloco_uid', blocoUid)
   }
-
+  
   const { data, error } = await query.order('numero', { ascending: true })
 
   if (error) throw error
   return data || []
+}
+
+export async function criarApartamento(apartamento: Omit<Apartamento, 'uid' | 'created_at' | 'updated_at' | 'bloco'>): Promise<Apartamento> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.apartamentos)
+    .insert(apartamento)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function atualizarApartamento(uid: string, apartamento: Partial<Apartamento>): Promise<Apartamento> {
+  const { bloco, ...rest } = apartamento // Remove o campo bloco do update
+  const { data, error } = await supabaseServer
+    .from(TABLES.apartamentos)
+    .update(rest)
+    .eq('uid', uid)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function excluirApartamento(uid: string): Promise<void> {
+  const { error } = await supabaseServer
+    .from(TABLES.apartamentos)
+    .update({ ativo: false })
+    .eq('uid', uid)
+
+  if (error) throw error
 }
 
 // ============================================
@@ -384,6 +449,56 @@ export async function buscarMorador(uid: string): Promise<Morador | null> {
 
   if (error) return null
   return data
+}
+
+export async function excluirMorador(uid: string): Promise<void> {
+  const { error } = await supabaseServer
+    .from(TABLES.moradores)
+    .update({ ativo: false })
+    .eq('uid', uid)
+
+  if (error) throw error
+}
+
+export async function adicionarDestinatario(
+  portaUid: string,
+  condominioUid: string,
+  destinatario: { bloco: string; apartamento: string },
+  usuarioUid?: string
+): Promise<{ sucesso: boolean; senha?: string }> {
+  try {
+    // Criar senha provisória para o novo destinatário
+    const senha = await criarSenhaProvisoria(portaUid, condominioUid, destinatario.bloco, destinatario.apartamento)
+    
+    // Registrar movimentação de compartilhamento
+    await registrarMovimentacao(
+      portaUid,
+      condominioUid,
+      'COMPARTILHAR',
+      'OCUPADO',
+      usuarioUid,
+      'WEB',
+      `Adicionado destinatário: ${destinatario.bloco} - Apto ${destinatario.apartamento}`,
+      destinatario.bloco,
+      destinatario.apartamento,
+      true
+    )
+
+    return { sucesso: true, senha }
+  } catch (error) {
+    throw new Error('Erro ao adicionar destinatário')
+  }
+}
+
+export async function buscarSenhasAtivas(portaUid: string): Promise<Array<{ bloco: string; apartamento: string; senha: string }>> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.senhas_provisorias)
+    .select('bloco, apartamento, senha')
+    .eq('porta_uid', portaUid)
+    .eq('status', 'ATIVA')
+
+  if (error) throw error
+  return data || []
 }
 
 // ============================================
@@ -555,6 +670,7 @@ export async function solicitarAberturaPortaIot(params: {
   deviceId: string
   portaNumero: number
   pulseMs?: number
+  token?: string
 }): Promise<{ comandoUid: string }> {
   const { deviceId, portaNumero, pulseMs = 800 } = params
 
@@ -600,7 +716,19 @@ export async function aguardarConclusaoComandoIot(
   return { sucesso: false, status: 'TIMEOUT' }
 }
 
+export async function consultarComandoIot(comandoUid: string): Promise<any> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.iot_comandos)
+    .select('*')
+    .eq('uid', comandoUid)
+    .single()
+
+  if (error) throw error
+  return data
+}
+
 export async function liberarPortaComSenha(
+  portaUid: string,
   condominioUid: string,
   senha: string,
   usuarioUid?: string

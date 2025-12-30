@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { useAuth } from '../src/contexts/AuthContext'
 import GaveteirosDashboard from '../src/pages/GaveteirosDashboard'
-import { LogOut, User, LayoutGrid, Users, Building2, Package, FileSpreadsheet, DoorOpen } from 'lucide-react'
+import { LogOut, User, LayoutGrid, Users, Building2, Package, FileSpreadsheet, DoorOpen, Settings, Wifi } from 'lucide-react'
 import Link from 'next/link'
 
 function MainLayout({ children }: { children: React.ReactNode }) {
@@ -172,16 +172,38 @@ function MainLayout({ children }: { children: React.ReactNode }) {
                 <span>Relatório</span>
               </Link>
               {usuario?.perfil === 'ADMIN' && (
-                <Link
-                  href="/teste-hardware"
-                  className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
-                    ${router.pathname === '/teste-hardware' 
-                      ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                      : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
-                >
-                  <DoorOpen size={16} />
-                  <span>Teste ESP32</span>
-                </Link>
+                <>
+                  <Link
+                    href="/configurar-esp32"
+                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                      ${router.pathname === '/configurar-esp32' 
+                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
+                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                  >
+                    <Wifi size={16} />
+                    <span>Configurar ESP</span>
+                  </Link>
+                  <Link
+                    href="/diagnosticar-esp32"
+                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                      ${router.pathname === '/diagnosticar-esp32' 
+                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
+                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                  >
+                    <Settings size={16} />
+                    <span>Diagnóstico</span>
+                  </Link>
+                  <Link
+                    href="/teste-hardware"
+                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                      ${router.pathname === '/teste-hardware' 
+                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
+                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                  >
+                    <DoorOpen size={16} />
+                    <span>Teste ESP32</span>
+                  </Link>
+                </>
               )}
             </div>
             

@@ -2,6 +2,8 @@
 #include <WebServer.h>
 #include <SPI.h>
 #include <Ethernet.h>
+#include <Wire.h>
+#include <Adafruit_MCP23X17.h>
 
 /* =====================================================
    CONFIGURAÇÕES GERAIS
@@ -21,55 +23,36 @@ IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
 IPAddress dns(8,8,8,8);
 
-#define ETH_CS_PIN  15   // ⚠️ usado apenas para SPI
+#define ETH_CS_PIN  15
 #define ETH_RST_PIN -1
 
 /* =====================================================
-   PORTAS
+   PORTAS (MCP23017)
    ===================================================== */
 
-#define NUM_PORTAS 10   // seguro com Ethernet
-
-// GPIOs 100% SEGUROS (sem boot strap)
-const int RELE_PINS[NUM_PORTAS] = {
-  26,  // Porta 1
-  27,  // Porta 2
-  16,  // Porta 3
-  17,  // Porta 4
-  21,  // Porta 5
-  22,  // Porta 6
-  23,  // Porta 7
-  25,  // Porta 8
-  32,  // Porta 9
-  33   // Porta 10
-};
-
-const int SENSOR_PINS[NUM_PORTAS] = {
-  34, 35, 36, 39,   // input only
-  -1, -1, -1, -1,
-  -1, -1
-};
-
+#define NUM_PORTAS 8
 #define TEMPO_PULSO 400
+#define SENSOR_DEBOUNCE_MS 300
 
-/* =====================================================
-   RELÉ – SOLUÇÃO DEFINITIVA
-   ===================================================== */
-// 🔒 RELÉ ATIVO EM LOW (padrão profissional)
+// Relé ativo em LOW
 const bool RELE_ATIVO_EM_HIGH = false;
-
 const uint8_t RELE_LIGADO    = RELE_ATIVO_EM_HIGH ? HIGH : LOW;
 const uint8_t RELE_DESLIGADO = RELE_ATIVO_EM_HIGH ? LOW  : HIGH;
 
 /* =====================================================
-   VARIÁVEIS
+   OBJETOS
    ===================================================== */
 
 WebServer server(80);
 EthernetServer ethServer(80);
+Adafruit_MCP23X17 mcp;
 
 enum ConexaoTipo { NENHUMA, ETHERNET, WIFI };
 ConexaoTipo conexaoAtiva = NENHUMA;
+
+/* =====================================================
+   VARIÁVEIS
+   ===================================================== */
 
 bool portaAberta[NUM_PORTAS] = {false};
 bool pulsoAtivo[NUM_PORTAS]  = {false};
@@ -79,8 +62,6 @@ bool sensorFechado[NUM_PORTAS] = {false};
 bool sensorEstadoAnterior[NUM_PORTAS] = {false};
 unsigned long sensorUltimoDebounce[NUM_PORTAS] = {0};
 
-#define SENSOR_DEBOUNCE_MS 300
-
 /* =====================================================
    FUNÇÕES DE PORTA
    ===================================================== */
@@ -88,8 +69,8 @@ unsigned long sensorUltimoDebounce[NUM_PORTAS] = {0};
 void abrirPorta(int porta) {
   int i = porta - 1;
   if (i < 0 || i >= NUM_PORTAS) return;
-  if (RELE_PINS[i] < 0) return;
-  digitalWrite(RELE_PINS[i], RELE_LIGADO);
+
+  mcp.digitalWrite(8 + i, RELE_LIGADO); // GPB
   portaAberta[i] = true;
   pulsoAtivo[i] = true;
   tempoInicioPulso[i] = millis();
@@ -98,8 +79,8 @@ void abrirPorta(int porta) {
 void fecharPorta(int porta) {
   int i = porta - 1;
   if (i < 0 || i >= NUM_PORTAS) return;
-  if (RELE_PINS[i] < 0) return;
-  digitalWrite(RELE_PINS[i], RELE_DESLIGADO);
+
+  mcp.digitalWrite(8 + i, RELE_DESLIGADO);
   portaAberta[i] = false;
   pulsoAtivo[i] = false;
 }
@@ -107,10 +88,8 @@ void fecharPorta(int porta) {
 void verificarPulsos() {
   unsigned long agora = millis();
   for (int i = 0; i < NUM_PORTAS; i++) {
-    if (pulsoAtivo[i] && (agora - tempoInicioPulso[i] >= TEMPO_PULSO)) {
-      if (RELE_PINS[i] >= 0) {
-        digitalWrite(RELE_PINS[i], RELE_DESLIGADO);
-      }
+    if (pulsoAtivo[i] && agora - tempoInicioPulso[i] >= TEMPO_PULSO) {
+      mcp.digitalWrite(8 + i, RELE_DESLIGADO);
       pulsoAtivo[i] = false;
       portaAberta[i] = false;
     }
@@ -118,27 +97,23 @@ void verificarPulsos() {
 }
 
 /* =====================================================
-   SENSORES
+   SENSORES (MCP)
    ===================================================== */
-
-bool lerSensor(int gpio) {
-  return digitalRead(gpio) == LOW;
-}
 
 void atualizarSensores() {
   unsigned long agora = millis();
   for (int i = 0; i < NUM_PORTAS; i++) {
-    if (SENSOR_PINS[i] < 0) continue;
-    bool leitura = lerSensor(SENSOR_PINS[i]);
+    bool leitura = (mcp.digitalRead(i) == LOW); // GPA
+
     if (leitura != sensorEstadoAnterior[i] &&
         agora - sensorUltimoDebounce[i] > SENSOR_DEBOUNCE_MS) {
+
       sensorEstadoAnterior[i] = leitura;
       sensorFechado[i] = leitura;
       sensorUltimoDebounce[i] = agora;
+
       Serial.print("[SENSOR] Porta ");
       Serial.print(i + 1);
-      Serial.print(" GPIO ");
-      Serial.print(SENSOR_PINS[i]);
       Serial.print(" => ");
       Serial.println(leitura ? "FECHADO" : "ABERTO");
     }
@@ -160,32 +135,28 @@ bool auth() {
 
 void handleStatus() {
   if (!auth()) return server.send(401,"application/json","{}");
+
   String json="{\"portas\":[";
   for(int i=0;i<NUM_PORTAS;i++){
     if(i) json+=",";
-    json+="{\"porta\":"+String(i+1)+",\"estado\":\""+String(portaAberta[i]?"aberta":"fechada")+"\",\"sensor\":\"";
-    if (SENSOR_PINS[i] < 0) {
-      json+="indefinido\"}";
-    } else {
-      json+=String(sensorFechado[i] ? "fechado" : "aberto");
-      json+="\"}";
-    }
+    json+="{\"porta\":"+String(i+1)+
+          ",\"estado\":\""+String(portaAberta[i]?"aberta":"fechada")+
+          "\",\"sensor\":\""+String(sensorFechado[i]?"fechado":"aberto")+"\"}";
   }
   json+="]}";
+
   server.send(200,"application/json",json);
 }
 
 void handleAbrir() {
   if (!auth()) return server.send(401,"application/json","{}");
-  int p = server.arg("porta").toInt();
-  abrirPorta(p);
+  abrirPorta(server.arg("porta").toInt());
   server.send(200,"application/json","{\"ok\":true}");
 }
 
 void handleFechar() {
   if (!auth()) return server.send(401,"application/json","{}");
-  int p = server.arg("porta").toInt();
-  fecharPorta(p);
+  fecharPorta(server.arg("porta").toInt());
   server.send(200,"application/json","{\"ok\":true}");
 }
 
@@ -219,26 +190,23 @@ bool conectarWiFi() {
 }
 
 /* =====================================================
-   SETUP – BLINDADO CONTRA BOOT
+   SETUP
    ===================================================== */
 
 void setup() {
-  // 🔒 RELÉS DESLIGADOS ANTES DE QUALQUER COISA
-  for(int i=0;i<NUM_PORTAS;i++){
-    if (RELE_PINS[i] < 0) continue;
-    digitalWrite(RELE_PINS[i], RELE_DESLIGADO);
-    pinMode(RELE_PINS[i], OUTPUT);
-    digitalWrite(RELE_PINS[i], RELE_DESLIGADO);
-  }
-
   Serial.begin(115200);
   delay(300);
 
+  // I2C
+  Wire.begin(21,22);
+
+  // MCP
+  mcp.begin_I2C(0x20);
+
   for(int i=0;i<NUM_PORTAS;i++){
-    if(SENSOR_PINS[i]>=34 && SENSOR_PINS[i]<=39)
-      pinMode(SENSOR_PINS[i], INPUT);
-    else if(SENSOR_PINS[i]>=0)
-      pinMode(SENSOR_PINS[i], INPUT_PULLUP);
+    mcp.pinMode(i, INPUT_PULLUP);   // GPA sensores
+    mcp.pinMode(8+i, OUTPUT);       // GPB relés
+    mcp.digitalWrite(8+i, RELE_DESLIGADO);
   }
 
   if(!conectarEthernet())
