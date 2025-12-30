@@ -118,6 +118,22 @@ export async function listarPortas(gaveteiroUid: string): Promise<Porta[]> {
   return data || []
 }
 
+export async function listarTodasPortas(condominioUid: string): Promise<Porta[]> {
+  const { data, error } = await supabase
+    .from(TABLES.portas)
+    .select('*')
+    .eq('condominio_uid', condominioUid)
+    .eq('ativo', true)
+    .order('numero_porta', { ascending: true })
+
+  if (error) {
+    console.error('Erro ao listar todas as portas:', error)
+    throw error
+  }
+  
+  return data || []
+}
+
 // Gera senha provisória de 6 dígitos
 function gerarSenhaAleatoria(): string {
   return Math.floor(100000 + Math.random() * 900000).toString()

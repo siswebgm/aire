@@ -819,6 +819,15 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
     setProcessando(true)
     setEtapa('confirmando')
     
+    // Logs de debug para tablet
+    console.log('[TOTEM DEBUG] Iniciando confirmarOcupacao')
+    console.log('[TOTEM DEBUG] portaSelecionada:', portaSelecionada)
+    console.log('[TOTEM DEBUG] condominio?.uid:', condominio?.uid)
+    console.log('[TOTEM DEBUG] destinatarios:', destinatarios)
+    console.log('[TOTEM DEBUG] User Agent:', navigator.userAgent)
+    console.log('[TOTEM DEBUG] Platform:', navigator.platform)
+    console.log('[TOTEM DEBUG] Speech Synthesis disponível:', 'speechSynthesis' in window)
+    
     try {
       // Enviar destinatários agregados (com quantidade) para persistir no banco.
       // A expansão por quantidade para gerar senhas/itens é feita no backend (ocuparPorta).
@@ -837,20 +846,100 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
         observacao: `Ocupação via Totem - ${totalEncomendas} encomenda(s)`
       })
 
-      // Abrir porta física via proxy Next.js (evita CORS)
-      // Proxy configurado em next.config.js: /esp32 -> http://192.168.1.73
-      console.log('[ESP32] Abrindo porta via proxy:', portaSelecionada.numero_porta)
+      console.log('[TOTEM] Porta ocupada no banco, preparando para abrir fisicamente...')
+
+      // Abrir porta física com token SHA256 (método que funciona)
+      const gaveteiro = (portaSelecionada as any).gaveteiro
+      console.log('[TOTEM DEBUG] gaveteiro:', gaveteiro)
+      console.log('[TOTEM DEBUG] gaveteiro.codigo_hardware:', gaveteiro?.codigo_hardware)
       
-      try {
-        await abrirPortaEsp32({
-          baseUrl: '/esp32',  // Usa proxy do Next.js
-          token: process.env.NEXT_PUBLIC_ESP32_DEFAULT_TOKEN || 'teste',
-          numeroPorta: portaSelecionada.numero_porta,
-          timeoutMs: 10000
-        })
-        console.log('[ESP32] Porta aberta com sucesso!')
-      } catch (espError: any) {
-        console.warn('[ESP32] Erro ao abrir:', espError?.message)
+      if (gaveteiro?.codigo_hardware) {
+        console.log('[TOTEM] Iniciando abertura física da porta...')
+        
+        try {
+          // Gerar token SHA256 dinâmico como o ESP32 espera
+          const AIRE_ESP_SECRET = "AIRE_2025_SUPER_SECRETO"
+          const base = `${condominio.uid}:${portaSelecionada.uid}:${portaSelecionada.numero_porta}:${AIRE_ESP_SECRET}`
+          
+          // Gerar SHA256
+          const msgBuffer = new TextEncoder().encode(base)
+          const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer)
+          const hashArray = Array.from(new Uint8Array(hashBuffer))
+          const token = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+          
+          // Usar IP direto se o código for um nome, ou usar o código diretamente se já for IP
+          let baseUrl = gaveteiro.codigo_hardware
+          if (!baseUrl.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+            // Se não for um IP, assume que é um nome e usa o IP padrão
+            baseUrl = '192.168.1.76'
+          }
+          
+          const url = `http://${baseUrl}/abrir?condominio_uid=${condominio.uid}&porta_uid=${portaSelecionada.uid}&porta=${portaSelecionada.numero_porta}&token=${token}`
+          console.log('[TOTEM] GET para abrir porta (confirmação):', url)
+          console.log('[TOTEM] Base para token:', base)
+          console.log('[TOTEM] Token gerado:', token)
+          console.log('[TOTEM DEBUG] URL length:', url.length)
+          
+          // Fazer requisição para abrir porta
+          const img = new Image()
+          img.src = url
+          
+          img.onerror = (error) => {
+            console.log('[TOTEM] Requisição enviada (pode ter falhado silenciosamente)')
+            console.log('[TOTEM DEBUG] Image onerror:', error)
+            
+            // Reproduz áudio mesmo que a requisição falhe
+            if ('speechSynthesis' in window) {
+              console.log('[TOTEM] Tentando reproduzir áudio (onerror)...')
+              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
+              utterance.lang = 'pt-BR'
+              utterance.rate = 1.5
+              utterance.pitch = 1
+              utterance.volume = 1
+              
+              utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
+              utterance.onend = () => console.log('[TOTEM] Áudio terminou')
+              utterance.onerror = (e) => console.error('[TOTEM] Erro no áudio:', e)
+              
+              window.speechSynthesis.cancel()
+              window.speechSynthesis.speak(utterance)
+              console.log('[TOTEM] Áudio reproduzido: Porta aberta')
+            } else {
+              console.warn('[TOTEM] Síntese de voz não disponível')
+            }
+          }
+          
+          img.onload = () => {
+            console.log('[TOTEM] Porta aberta com sucesso!')
+            
+            // Reproduz áudio anunciando que a porta está aberta
+            if ('speechSynthesis' in window) {
+              console.log('[TOTEM] Tentando reproduzir áudio (onload)...')
+              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
+              utterance.lang = 'pt-BR'
+              utterance.rate = 1.5
+              utterance.pitch = 1
+              utterance.volume = 1
+              
+              utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
+              utterance.onend = () => console.log('[TOTEM] Áudio terminou')
+              utterance.onerror = (e) => console.error('[TOTEM] Erro no áudio:', e)
+              
+              window.speechSynthesis.cancel()
+              window.speechSynthesis.speak(utterance)
+              console.log('[TOTEM] Áudio reproduzido: Porta aberta')
+            } else {
+              console.warn('[TOTEM] Síntese de voz não disponível')
+            }
+          }
+          
+        } catch (espError: any) {
+          console.error('[TOTEM] Erro ao abrir porta:', espError?.message)
+          console.error('[TOTEM] Stack:', espError?.stack)
+        }
+      } else {
+        console.warn('[TOTEM] Porta não possui gaveteiro.codigo_hardware')
+        console.log('[TOTEM] portaSelecionada:', portaSelecionada)
       }
 
       setSenhasGeradas(resultado.senhas)

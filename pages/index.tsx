@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import { useAuth } from '../src/contexts/AuthContext'
 import GaveteirosDashboard from '../src/pages/GaveteirosDashboard'
-import { LogOut, User, LayoutGrid, Users, Building2, Package, FileSpreadsheet, DoorOpen, Settings, Wifi } from 'lucide-react'
+import { LogOut, User, LayoutGrid, Users, Building2, Package, FileSpreadsheet, Wifi, Activity } from 'lucide-react'
 import Link from 'next/link'
+import TodasPortas from '../src/components/portas/TodasPortas'
 
 function MainLayout({ children }: { children: React.ReactNode }) {
   const { usuario, condominio, logout } = useAuth()
@@ -12,30 +13,28 @@ function MainLayout({ children }: { children: React.ReactNode }) {
   const [menuAberto, setMenuAberto] = useState(false)
 
   return (
-    <div className={`${isTotem ? 'bg-slate-50' : 'bg-gray-100'} flex flex-col min-h-screen w-full`}>
+    <div className={`${isTotem ? 'bg-slate-50' : 'bg-transparent'} flex flex-col min-h-screen w-full`}>
       <header
         className={
           isTotem
-            ? 'text-white shadow-xl bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900'
-            : 'bg-gradient-to-r from-indigo-700 via-indigo-600 to-purple-600 text-white shadow-xl'
+            ? 'text-white shadow-xl bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900'
+            : 'bg-gradient-to-r from-sky-600 via-sky-700 to-blue-800 text-white shadow-xl'
         }
       >
         <div className="w-full px-3 sm:px-6 lg:px-8 py-2 sm:py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
               <div className="flex items-center">
-                <div className="w-9 h-9 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center shadow-md overflow-hidden p-1">
-                  <svg viewBox="0 0 36 26" className="w-full h-full">
-                    <rect x="1" y="1" width="16" height="11" rx="2" fill="#22c55e"/>
-                    <rect x="19" y="1" width="16" height="11" rx="2" fill="#ef4444"/>
-                    <rect x="1" y="14" width="16" height="11" rx="2" fill="#ef4444"/>
-                    <rect x="19" y="14" width="16" height="11" rx="2" fill="#22c55e"/>
-                    <text x="9" y="9" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">1</text>
-                    <text x="27" y="9" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">2</text>
-                    <text x="9" y="22" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">3</text>
-                    <text x="27" y="22" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">4</text>
-                  </svg>
-                </div>
+                <svg viewBox="0 0 36 26" className="w-9 h-9">
+                  <rect x="1" y="1" width="16" height="11" rx="2" fill="#22c55e"/>
+                  <rect x="19" y="1" width="16" height="11" rx="2" fill="#ef4444"/>
+                  <rect x="1" y="14" width="16" height="11" rx="2" fill="#ef4444"/>
+                  <rect x="19" y="14" width="16" height="11" rx="2" fill="#22c55e"/>
+                  <text x="9" y="9" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">1</text>
+                  <text x="27" y="9" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">2</text>
+                  <text x="9" y="22" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">3</text>
+                  <text x="27" y="22" fill="white" fontSize="7" textAnchor="middle" fontWeight="bold">4</text>
+                </svg>
                 <svg viewBox="0 0 28 44" className="w-5 h-8 -ml-2">
                   <ellipse cx="14" cy="30" rx="10" ry="12" fill="white"/>
                   <circle cx="14" cy="12" r="10" fill="#fcd34d"/>
@@ -58,38 +57,38 @@ function MainLayout({ children }: { children: React.ReactNode }) {
                   className={
                     isTotem
                       ? 'flex items-center gap-2 px-3 py-2 bg-transparent hover:bg-white/10 rounded-xl transition-all text-sm font-medium'
-                      : 'flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 backdrop-blur-sm rounded-xl transition-all text-sm font-medium'
+                      : 'flex items-center gap-2 px-3 py-2 bg-sky-700/20 hover:bg-sky-700/30 backdrop-blur-sm rounded-xl transition-all text-sm font-medium hover:shadow-lg hover:scale-[1.02]'
                   }
                 >
-                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-                    <User size={16} />
+                  <div className="w-8 h-8 bg-gradient-to-br from-sky-500 to-sky-600 rounded-full flex items-center justify-center group-hover:from-sky-400 group-hover:to-sky-500 transition-all">
+                    <User size={16} className="text-white group-hover:scale-110 transition-transform" />
                   </div>
-                  <span className="hidden sm:inline">{usuario.nome}</span>
+                  <span className="hidden sm:inline text-white font-medium">{usuario.nome}</span>
                 </button>
                 
                 {menuAberto && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setMenuAberto(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-100 z-50">
-                      <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-xl">
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-gradient-to-br from-sky-50 to-blue-100 rounded-xl shadow-2xl border border-sky-200 z-50">
+                      <div className="p-4 border-b border-sky-200 rounded-t-xl">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold">
+                          <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold">
                             {usuario.nome.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-semibold text-gray-800">{usuario.nome}</p>
-                            <p className="text-xs text-gray-500">{usuario.email || 'Usuário'}</p>
+                            <p className="font-semibold text-sky-800">{usuario.nome}</p>
+                            <p className="text-xs text-sky-600">{usuario.email || 'Usuário'}</p>
                           </div>
                         </div>
                       </div>
-                      <div className="p-3 border-b border-gray-100">
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Building2 size={14} className="text-blue-500" />
+                      <div className="p-3 border-b border-sky-200">
+                        <div className="flex items-center gap-2 text-sm text-sky-700">
+                          <Building2 size={14} className="text-sky-600" />
                           <span className="font-medium">{condominio?.nome || 'Condomínio'}</span>
                         </div>
                       </div>
-                      <div className="px-3 py-2 border-b border-gray-100">
-                        <div className="flex items-center justify-between text-xs text-gray-400">
+                      <div className="px-3 py-2 border-b border-sky-200">
+                        <div className="flex items-center justify-between text-xs text-sky-500">
                           <span>AIRE v1.0</span>
                           <span>{new Date().getFullYear()}</span>
                         </div>
@@ -117,91 +116,81 @@ function MainLayout({ children }: { children: React.ReactNode }) {
               ? 'border-t border-gray-100 bg-white shadow-sm py-2 sm:py-2.5'
               : 'shadow-sm py-2 sm:py-2.5'
           }
-          style={!isTotem ? { backgroundColor: '#3730a3' } : undefined}
+          style={!isTotem ? { backgroundColor: '#0369a1' } : { backgroundColor: 'transparent' }}
         >
           <div className="w-full px-2 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2 sm:gap-3">
             <div className="flex flex-wrap gap-1 sm:gap-1.5 flex-1">
               <Link
                 href="/"
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                   ${router.pathname === '/' 
-                    ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
               >
                 <LayoutGrid size={16} />
-                <span>Gaveteiros</span>
+                <span>Dashboard</span>
               </Link>
               <Link
                 href="/totem"
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                   ${router.pathname === '/totem' 
-                    ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
               >
                 <Package size={16} />
                 <span>Totem</span>
               </Link>
               <Link
                 href="/moradores"
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                   ${router.pathname === '/moradores' 
-                    ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
               >
                 <Users size={16} />
                 <span>Moradores</span>
               </Link>
               <Link
                 href="/blocos"
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                   ${router.pathname === '/blocos' 
-                    ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
               >
                 <Building2 size={16} />
                 <span>Blocos</span>
               </Link>
               <Link
                 href="/relatorio"
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                   ${router.pathname === '/relatorio' 
-                    ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
               >
                 <FileSpreadsheet size={16} />
                 <span>Relatório</span>
+              </Link>
+              <Link
+                href="/movimentos"
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
+                  ${router.pathname === '/movimentos' 
+                    ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                    : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
+              >
+                <Activity size={16} />
+                <span>Movimentos</span>
               </Link>
               {usuario?.perfil === 'ADMIN' && (
                 <>
                   <Link
                     href="/configurar-esp32"
-                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
+                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-300 rounded-lg whitespace-nowrap
                       ${router.pathname === '/configurar-esp32' 
-                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
+                        ? 'bg-gradient-to-r from-sky-100 to-blue-100 text-white shadow-lg scale-[1.02] ring-2 ring-sky-300' 
+                        : 'text-white/90 hover:bg-white/15 hover:text-white hover:scale-[1.01] hover:shadow-md'}`}
                   >
                     <Wifi size={16} />
                     <span>Configurar ESP</span>
-                  </Link>
-                  <Link
-                    href="/diagnosticar-esp32"
-                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
-                      ${router.pathname === '/diagnosticar-esp32' 
-                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
-                  >
-                    <Settings size={16} />
-                    <span>Diagnóstico</span>
-                  </Link>
-                  <Link
-                    href="/teste-hardware"
-                    className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold transition-all duration-200 rounded-lg whitespace-nowrap
-                      ${router.pathname === '/teste-hardware' 
-                        ? 'bg-white text-indigo-700 shadow-sm scale-[1.01]' 
-                        : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
-                  >
-                    <DoorOpen size={16} />
-                    <span>Teste ESP32</span>
                   </Link>
                 </>
               )}
@@ -250,7 +239,7 @@ export default function Home() {
 
   return (
     <MainLayout>
-      <GaveteirosDashboard />
+      <TodasPortas />
     </MainLayout>
   )
 }

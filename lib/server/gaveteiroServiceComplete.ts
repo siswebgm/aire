@@ -112,10 +112,36 @@ export async function listarPortas(gaveteiroUid: string): Promise<Porta[]> {
     .from(TABLES.portas)
     .select('*')
     .eq('gaveteiro_uid', gaveteiroUid)
+    .eq('ativo', true)
     .order('numero_porta', { ascending: true })
 
   if (error) throw error
   return data || []
+}
+
+export async function listarTodasPortas(condominioUid: string): Promise<Porta[]> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.portas)
+    .select(`
+      *,
+      gaveteiros!inner (
+        uid,
+        nome,
+        codigo_hardware
+      )
+    `)
+    .eq('condominio_uid', condominioUid)
+    .eq('ativo', true)
+    .order('numero_porta', { ascending: true })
+
+  if (error) throw error
+  
+  // Transformar os dados para incluir informações do gaveteiro
+  return (data || []).map(porta => ({
+    ...porta,
+    gaveteiro_nome: porta.gaveteiros?.nome,
+    gaveteiro_codigo: porta.gaveteiros?.codigo_hardware
+  }))
 }
 
 export async function atualizarStatusPorta(

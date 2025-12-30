@@ -7,7 +7,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Variáveis de ambiente Supabase não configuradas')
 }
 
-// Cliente Supabase - usando schema cobrancas (já exposto no PostgREST)
+// Cliente Supabase - usando schema cobrancas (onde as tabelas realmente existem)
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   db: {
     schema: 'cobrancas'
@@ -16,6 +16,11 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     headers: {
       'Accept-Profile': 'cobrancas',
       'Content-Profile': 'cobrancas'
+    }
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
     }
   }
 })

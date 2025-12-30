@@ -4,7 +4,6 @@
 
 html {
   height: 100%;
-  background: #f8fafc;
 }
 
 body {
@@ -12,12 +11,18 @@ body {
   min-height: 100%;
   margin: 0;
   padding: 0;
-  background: #f8fafc;
   overflow-x: hidden;
+  background: #ffffff;
+  min-height: 100vh;
 }
 
 #root {
   min-height: 100vh;
+}
+
+/* Garantir que o header tenha seu gradiente */
+header {
+  background: linear-gradient(to right, #0284c7, #0ea5e9, #1e40af) !important;
 }
 
 /* Scrollbar discreta */

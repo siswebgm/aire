@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
+import { ArrowLeft, Wifi, RefreshCw, TestTube, Info, Server, Activity, CheckCircle, AlertCircle, Lock, Send } from 'lucide-react'
 
 export default function ConfigurarESP32() {
   const [ssid, setSsid] = useState('')
@@ -442,220 +443,276 @@ export default function ConfigurarESP32() {
         <meta name="description" content="Configurar WiFi do ESP32" />
       </Head>
 
-      <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="w-full bg-white rounded-lg shadow-md p-6">
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">Configurar ESP32</h1>
-            <p className="mt-2 text-gray-600">
-              Configure o WiFi do seu dispositivo ESP32
-            </p>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 py-8 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto">
+          {/* Header moderno */}
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-6">
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => router.back()}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-sky-50 text-blue-600 hover:from-blue-100 hover:to-sky-100 rounded-xl transition-all font-medium border border-blue-200"
+              >
+                <ArrowLeft size={20} />
+                <span>Voltar</span>
+              </button>
+              
+              <div className="text-center flex-1">
+                <div className="flex items-center justify-center gap-3 mb-2">
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-sky-600 rounded-xl flex items-center justify-center text-white">
+                    <Wifi size={24} />
+                  </div>
+                  <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-sky-600 bg-clip-text text-transparent">
+                    Configurar ESP32
+                  </h1>
+                </div>
+                <p className="text-gray-600">
+                  Configure o WiFi do seu dispositivo ESP32
+                </p>
+              </div>
+              
+              <div className="w-20"></div> {/* Spacer para centralizar */}
+            </div>
           </div>
 
-          {/* Abas */}
-          <div className="flex border-b border-gray-200 mb-6">
-            <button
-              onClick={() => setActiveTab('config')}
-              className={`flex-1 py-2 px-4 text-center font-medium ${
-                activeTab === 'config'
-                  ? 'border-b-2 border-blue-500 text-blue-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Configurar WiFi
-            </button>
-            <button
-              onClick={() => setActiveTab('reset')}
-              className={`flex-1 py-2 px-4 text-center font-medium ${
-                activeTab === 'reset'
-                  ? 'border-b-2 border-blue-500 text-blue-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Resetar WiFi
-            </button>
-            <button
-              onClick={() => setActiveTab('test')}
-              className={`flex-1 py-2 px-4 text-center font-medium ${
-                activeTab === 'test'
-                  ? 'border-b-2 border-blue-500 text-blue-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Testar Gaveteiros
-            </button>
+          {/* Abas modernas */}
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-2 mb-6">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setActiveTab('config')}
+                className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all ${
+                  activeTab === 'config'
+                    ? 'bg-gradient-to-r from-blue-600 to-sky-600 text-white shadow-lg'
+                    : 'bg-gray-200 text-gray-900 hover:bg-gray-300 border-2 border-gray-400'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Wifi size={18} />
+                  <span>Configurar WiFi</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('reset')}
+                className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all ${
+                  activeTab === 'reset'
+                    ? 'bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg'
+                    : 'bg-gray-200 text-gray-900 hover:bg-gray-300 border-2 border-gray-400'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <RefreshCw size={18} />
+                  <span>Resetar WiFi</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('test')}
+                className={`flex-1 px-4 py-3 rounded-xl font-medium transition-all ${
+                  activeTab === 'test'
+                    ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white shadow-lg'
+                    : 'bg-gray-200 text-gray-900 hover:bg-gray-300 border-2 border-gray-400'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <TestTube size={18} />
+                  <span>Testar Gaveteiros</span>
+                </div>
+              </button>
+            </div>
           </div>
 
           {/* Conteúdo da aba Configurar */}
           {activeTab === 'config' && (
-            <>
-              {/* Alerta de segurança */}
-              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-6">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
+            <div className="space-y-6">
+              {/* Aviso importante de conexão */}
+              <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-2xl p-6 mb-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center text-white">
+                    <AlertCircle size={20} />
                   </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-yellow-800">
-                      Modo AP do ESP32
-                    </h3>
-                    <div className="mt-2 text-sm text-yellow-700">
-                      <p>O ESP32 deve estar em modo Access Point (AP) com IP padrão 192.168.4.1</p>
-                      <p className="mt-1">Conecte-se à rede WiFi "ESP32-AP" antes de configurar.</p>
+                  <h3 className="text-lg font-semibold text-orange-900">Conexão Obrigatória</h3>
+                </div>
+                <div className="bg-white/80 rounded-xl p-4 border border-orange-200">
+                  <p className="text-sm font-semibold text-orange-800 mb-2">
+                    ⚠️ Antes de configurar, conecte-se ao WiFi do gaveteiro:
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div className="bg-orange-100 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-orange-700 mb-1">Nome da Rede:</p>
+                      <p className="text-sm font-bold text-orange-900">AIRE-CONFIG</p>
+                    </div>
+                    <div className="bg-orange-100 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-orange-700 mb-1">Senha:</p>
+                      <p className="text-sm font-bold text-orange-900">12345678</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-orange-600 mt-3">
+                    Após conectar, volte a esta página para configurar o WiFi do seu condomínio.
+                  </p>
+                </div>
+              </div>
+
+              {/* Guia passo a passo */}
+              <div className="bg-gradient-to-r from-blue-50 to-sky-50 rounded-2xl p-6 border border-blue-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center text-white">
+                    <Info size={20} />
+                  </div>
+                  <h3 className="text-lg font-semibold text-blue-900">Guia de Configuração</h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">1</div>
+                      <p className="text-sm text-blue-800">Conecte-se à rede "ESP32-AP"</p>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">2</div>
+                      <p className="text-sm text-blue-800">Verifique o IP (padrão: 192.168.4.1)</p>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">3</div>
+                      <p className="text-sm text-blue-800">Teste a conexão primeiro</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">4</div>
+                      <p className="text-sm text-blue-800">Preencha SSID e senha</p>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">5</div>
+                      <p className="text-sm text-blue-800">Clique em "Configurar WiFi"</p>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 mt-0.5">6</div>
+                      <p className="text-sm text-blue-800">Aguarde a reinicialização</p>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Indicador de rede atual */}
-              {currentNetwork && (
-                <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-6">
-                  <div className="flex">
-                    <div className="flex-shrink-0">
-                      <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M17.778 8.222c-4.296-4.296-11.26-4.296-15.556 0A1 1 0 01.808 6.808c5.076-5.077 13.308-5.077 18.384 0a1 1 0 01-1.414 1.414zM14.95 11.05a7 7 0 00-9.9 0 1 1 0 01-1.414-1.414 9 9 0 0112.728 0 1 1 0 01-1.414 1.414zM12.12 13.88a3 3 0 00-4.242 0 1 1 0 01-1.415-1.415 5 5 0 017.072 0 1 1 0 01-1.415 1.415zM9 16a1 1 0 011-1v0a1 1 0 110 2v0a1 1 0 01-1-1z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <div className="ml-3">
-                      <p className="text-sm text-blue-800">
-                        {currentNetwork} - Verifique se está em uma rede 2.4GHz para melhor compatibilidade com ESP32
-                      </p>
+              {/* Formulário */}
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  {/* IP do ESP32 */}
+                  <div>
+                    <label htmlFor="espIP" className="block text-sm font-semibold text-gray-700 mb-2">
+                      IP do ESP32
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Server size={18} className="text-gray-400" />
+                      </div>
+                      <input
+                        type="text"
+                        id="espIP"
+                        value={espIP}
+                        onChange={(e) => setEspIP(e.target.value)}
+                        className="pl-10 block w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                        placeholder="192.168.4.1"
+                        required
+                      />
                     </div>
                   </div>
-                </div>
-              )}
 
-              {/* Formulário de configuração */}
-              <form onSubmit={handleSubmit} className="space-y-6">
-                {/* IP do ESP32 */}
-                <div>
-                  <label htmlFor="espIP" className="block text-sm font-medium text-gray-700">
-                    IP do ESP32
-                  </label>
-                  <input
-                    type="text"
-                    id="espIP"
-                    value={espIP}
-                    onChange={(e) => setEspIP(e.target.value)}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="192.168.4.1"
-                    required
-                  />
-                </div>
+                  {/* Botões de teste */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={testarConexao}
+                      disabled={loading}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-gray-600 to-gray-700 text-white py-3 px-4 rounded-xl hover:from-gray-700 hover:to-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50 transition-all"
+                    >
+                      <Activity size={18} />
+                      {loading ? 'Testando...' : 'Testar Conexão'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={verificarStatusGaveteiro}
+                      disabled={checkingStatus}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 px-4 rounded-xl hover:from-green-700 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 transition-all"
+                    >
+                      <CheckCircle size={18} />
+                      {checkingStatus ? 'Verificando...' : 'Verificar Gaveteiro'}
+                    </button>
+                  </div>
 
-                {/* Botão de teste */}
-                <div className="flex space-x-3">
-                  <button
-                    type="button"
-                    onClick={testarConexao}
-                    disabled={loading}
-                    className="flex-1 bg-gray-600 text-white py-2 px-4 rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50"
-                  >
-                    {loading ? 'Testando...' : 'Testar Conexão'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={verificarStatusGaveteiro}
-                    disabled={checkingStatus}
-                    className="flex-1 bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
-                  >
-                    {checkingStatus ? 'Verificando...' : 'Verificar Gaveteiro'}
-                  </button>
-                </div>
-
-                {/* Status do gaveteiro */}
-                {gaveteiroStatus && (
-                  <div className="bg-green-50 border border-green-200 rounded-md p-3">
-                    <div className="flex">
-                      <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        </svg>
-                      </div>
-                      <div className="ml-3">
-                        <p className="text-sm text-green-800">
-                          Gaveteiro conectado! Modo: {gaveteiroStatus.modo.toUpperCase()} | IP: {gaveteiroStatus.ip}
-                        </p>
+                  {/* Status do gaveteiro */}
+                  {gaveteiroStatus && (
+                    <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-green-500 rounded-lg flex items-center justify-center text-white">
+                          <CheckCircle size={20} />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-green-900">
+                            Gaveteiro Conectado!
+                          </p>
+                          <p className="text-sm text-green-700">
+                            Modo: {gaveteiroStatus.modo.toUpperCase()} | IP: {gaveteiroStatus.ip}
+                          </p>
+                        </div>
                       </div>
                     </div>
+                  )}
+
+                  {/* SSID */}
+                  <div>
+                    <label htmlFor="ssid" className="block text-sm font-semibold text-gray-700 mb-2">
+                      Nome da Rede WiFi (SSID)
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Wifi size={18} className="text-gray-400" />
+                      </div>
+                      <input
+                        type="text"
+                        id="ssid"
+                        value={ssid}
+                        onChange={(e) => setSsid(e.target.value)}
+                        className="pl-10 block w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                        placeholder="Nome da Rede WiFi"
+                        required
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500 flex items-center gap-1">
+                      <AlertCircle size={12} />
+                      Prefira redes 2.4GHz para melhor compatibilidade
+                    </p>
                   </div>
-                )}
 
-                {/* Resposta bruta do status */}
-                {statusResponse && (
-                  <div className="bg-gray-100 border border-gray-300 rounded-md p-3">
-                    <h4 className="text-sm font-medium text-gray-800 mb-2">URL Chamada:</h4>
-                    <code className="text-xs text-gray-600 block mb-2">
-                      curl "http://{armarioIP}/status"
-                    </code>
-                    <h4 className="text-sm font-medium text-gray-800 mb-2">Resposta do Gaveteiro:</h4>
-                    <pre className="text-xs text-gray-600 whitespace-pre-wrap break-all">
-                      {statusResponse}
-                    </pre>
+                  {/* Senha */}
+                  <div>
+                    <label htmlFor="password" className="block text-sm font-semibold text-gray-700 mb-2">
+                      Senha do WiFi
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Lock size={18} className="text-gray-400" />
+                      </div>
+                      <input
+                        type="password"
+                        id="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="pl-10 block w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                        placeholder="Senha do WiFi"
+                        required
+                      />
+                    </div>
                   </div>
-                )}
 
-                {/* SSID */}
-                <div>
-                  <label htmlFor="ssid" className="block text-sm font-medium text-gray-700">
-                    Nome da Rede WiFi (SSID)
-                  </label>
-                  <input
-                    type="text"
-                    id="ssid"
-                    value={ssid}
-                    onChange={(e) => setSsid(e.target.value)}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Nome da Rede WiFi (SSID) - Prefira redes 2.4GHz (2G)"
-                    required
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    ESP32 funciona melhor com redes 2.4GHz. Redes 5GHz podem não ser compatíveis.
-                  </p>
-                </div>
-
-                {/* Senha */}
-                <div>
-                  <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                    Senha do WiFi
-                  </label>
-                  <input
-                    type="password"
-                    id="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="SUA_SENHA_WIFI"
-                    required
-                  />
-                </div>
-
-                {/* Botão de envio */}
-                <div>
+                  {/* Botão principal */}
                   <button
                     type="submit"
                     disabled={loading}
-                    className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                    className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-sky-600 text-white py-4 px-4 rounded-xl hover:from-blue-700 hover:to-sky-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 transition-all text-lg font-semibold shadow-lg"
                   >
-                    {loading ? 'Enviando...' : 'Configurar WiFi'}
+                    <Send size={20} />
+                    {loading ? 'Enviando configuração...' : 'Configurar WiFi'}
                   </button>
-                </div>
-              </form>
-
-              {/* Comando curl equivalente */}
-              <div className="mt-6 bg-gray-100 rounded-md p-4">
-                <h3 className="text-sm font-medium text-gray-800 mb-2">
-                  {result?.success && result.exactURL ? 'URL exata enviada:' : 'Comando equivalente (curl):'}
-                </h3>
-                <code className="text-xs text-gray-600 block">
-                  {result?.success && result.exactURL 
-                    ? `curl "${result.exactURL}"`
-                    : getCurlCommand()
-                  }
-                </code>
+                </form>
               </div>
-            </>
+            </div>
           )}
 
           {/* Conteúdo da aba Reset */}

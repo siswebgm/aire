@@ -494,29 +494,29 @@ export default function GaveteirosDashboard() {
         </div>
       )}
 
-      {/* Header com Resumo - Design Clean */}
-      <div className="bg-gray-50 rounded-xl p-3 mt-4 mb-5 shadow-sm border border-gray-200">
+      {/* Header com Resumo - Design Harmonioso Sky */}
+      <div className="bg-gradient-to-r from-sky-50 via-sky-100 to-blue-100 rounded-xl p-3 mt-4 mb-5 shadow-sm border border-sky-200">
         <div className="flex items-center justify-between gap-2">
           {/* Título */}
           <div className="flex items-center gap-2 flex-shrink-0">
-            <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-              <LayoutGrid size={16} className="text-blue-600" />
+            <div className="w-8 h-8 bg-sky-700 rounded-lg flex items-center justify-center">
+              <LayoutGrid size={16} className="text-white" />
             </div>
-            <h1 className="text-xl font-bold text-gray-800">Gaveteiros</h1>
+            <h1 className="text-xl font-bold text-sky-800">Gaveteiros</h1>
           </div>
           
           {/* Cards de Estatísticas - Na mesma linha */}
           <div className="flex items-center gap-1 flex-shrink-0">
-            <div className="bg-gray-100 rounded px-2 py-0.5 flex items-center gap-1">
-              <span className="text-sm font-bold text-gray-600">{totais.gaveteiros}</span>
-              <span className="text-[8px] text-gray-400">total</span>
+            <div className="bg-sky-100 rounded px-2 py-0.5 flex items-center gap-1 hover:bg-sky-200 transition-colors cursor-pointer group">
+              <span className="text-sm font-bold text-sky-700 group-hover:scale-110 transition-transform">{totais.gaveteiros}</span>
+              <span className="text-[8px] text-sky-500">total</span>
             </div>
-            <div className="bg-green-100 rounded px-2 py-0.5 flex items-center gap-1">
-              <span className="text-sm font-bold text-green-600">{totais.livres}</span>
+            <div className="bg-green-100 rounded px-2 py-0.5 flex items-center gap-1 hover:bg-green-200 transition-colors cursor-pointer group">
+              <span className="text-sm font-bold text-green-600 group-hover:scale-110 transition-transform">{totais.livres}</span>
               <span className="text-[8px] text-green-500">livres</span>
             </div>
-            <div className="bg-red-100 rounded px-2 py-0.5 flex items-center gap-1">
-              <span className="text-sm font-bold text-red-600">{totais.ocupadas}</span>
+            <div className="bg-red-100 rounded px-2 py-0.5 flex items-center gap-1 hover:bg-red-200 transition-colors cursor-pointer group">
+              <span className="text-sm font-bold text-red-600 group-hover:scale-110 transition-transform">{totais.ocupadas}</span>
               <span className="text-[8px] text-red-500">ocupadas</span>
             </div>
           </div>
