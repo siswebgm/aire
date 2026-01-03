@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
 import { Key, ArrowLeft, Users, Package, Trash2, RefreshCw, AlertTriangle, Download } from 'lucide-react'
@@ -226,8 +226,6 @@ export default function DetalhesPorta() {
     pdf.text(`Número da Porta: ${porta.numero_porta}`, 20, yPosition)
     yPosition += 7
     pdf.text(`Status Atual: ${porta.status_atual}`, 20, yPosition)
-    yPosition += 7
-    pdf.text(`UID: ${porta.uid}`, 20, yPosition)
     yPosition += 15
     
     // Gaveteiro
@@ -237,8 +235,6 @@ export default function DetalhesPorta() {
     
     pdf.setFontSize(10)
     pdf.text(`Nome: ${porta.gaveteiro_nome || 'N/A'}`, 20, yPosition)
-    yPosition += 7
-    pdf.text(`Código Hardware: ${porta.gaveteiro_codigo || 'N/A'}`, 20, yPosition)
     yPosition += 15
     
     // Informações de Ocupação
@@ -288,8 +284,6 @@ export default function DetalhesPorta() {
     pdf.setFontSize(10)
     pdf.text(`Fechadura: ${porta.fechadura_status || 'Desconhecido'}`, 20, yPosition)
     yPosition += 7
-    pdf.text(`Sensor IMA: ${porta.sensor_ima_status || 'Desconhecido'}`, 20, yPosition)
-    yPosition += 7
     pdf.text(`Último Evento: ${formatarData(porta.ultimo_evento_em)}`, 20, yPosition)
     yPosition += 15
     
@@ -337,7 +331,7 @@ export default function DetalhesPorta() {
       <div className="min-h-screen bg-gray-50">
         {/* Header */}
         <div className="bg-blue-600 border-b border-blue-700">
-          <div className="w-full px-4 sm:px-6 lg:px-8">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               <div className="flex items-center gap-4">
                 <button
@@ -351,7 +345,7 @@ export default function DetalhesPorta() {
                     <Key size={16} className="text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-semibold text-white">Configurações da Porta</h1>
+                    <h1 className="text-xl font-bold text-white">Configurações da Porta</h1>
                     <p className="text-xs text-white">Porta {porta.numero_porta}</p>
                   </div>
                 </div>
@@ -368,10 +362,10 @@ export default function DetalhesPorta() {
         </div>
 
         {/* Conteúdo */}
-        <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             {/* Coluna Principal */}
-            <div className="lg:col-span-4 space-y-6">
+            <div className="lg:col-span-5 space-y-6">
               {/* Status Principal */}
               <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Status Principal</h2>
@@ -393,18 +387,14 @@ export default function DetalhesPorta() {
                     <span className="text-sm font-medium text-gray-600">Gaveteiro:</span>
                     <span className="text-sm font-bold text-gray-900">{porta.gaveteiro_nome || 'N/A'}</span>
                   </div>
-                  <div className="flex justify-between items-center p-4 bg-gray-50 rounded-lg border border-gray-100">
-                    <span className="text-sm font-medium text-gray-600">Código Hardware:</span>
-                    <span className="text-xs font-mono text-gray-900 bg-gray-200 px-3 py-1 rounded">{porta.gaveteiro_codigo || 'N/A'}</span>
-                  </div>
                 </div>
               </div>
 
               {/* Ocupação */}
               <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Informações de Ocupação</h2>
-                <div className="flex flex-wrap items-center gap-4 p-4 bg-white rounded-lg border border-gray-200">
-                  <div className="flex items-center gap-2 inline-flex">
+                <div className="space-y-4 p-4 bg-white rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-gray-600">Ocupada em:</span>
                     <span className="text-sm font-bold text-blue-900">
                       {porta.ocupado_em ? 
@@ -414,7 +404,7 @@ export default function DetalhesPorta() {
                     </span>
                   </div>
                   
-                  <div className="flex items-center gap-2 inline-flex">
+                  <div className="flex flex-col items-start gap-2 w-full">
                     <span className="text-sm font-medium text-gray-600">Blocos:</span>
                     {porta.bloco_atual && porta.apartamento_atual ? (
                       (() => {
@@ -431,27 +421,39 @@ export default function DetalhesPorta() {
                           }
                         })
 
-                        return Array.from(blocoApartamentoMap.entries()).map(([bloco, apts]) => (
-                          <div key={bloco} className="flex items-center gap-1">
-                            <div className="w-5 h-5 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">
-                              {bloco.replace('Bloco ', '').replace('B', '')}
-                            </div>
-                            <div className="flex gap-1">
-                              {apts.map(apt => (
-                                <span key={apt} className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-medium">
-                                  {apt}
-                                </span>
-                              ))}
-                            </div>
+                        return (
+                          <div className="flex items-center gap-3 overflow-x-auto pb-2">
+                            {Array.from(blocoApartamentoMap.entries()).map(([bloco, apts]) => (
+                              <div key={bloco} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors flex-shrink-0">
+                                <div className="flex-shrink-0">
+                                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold shadow-sm">
+                                    {bloco.replace('Bloco ', '').replace('B', '')}
+                                  </div>
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-medium text-gray-600 mb-1">{bloco}</div>
+                                  <div className="flex gap-2 whitespace-nowrap">
+                                    {apts.map(apt => (
+                                      <span 
+                                        key={`${bloco}-${apt}`} 
+                                        className="px-2 py-1 bg-white text-blue-700 border border-blue-200 rounded-md text-xs font-medium hover:bg-blue-50 transition-colors"
+                                      >
+                                        {apt}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        ))
+                        )
                       })()
                     ) : (
                       <span className="text-gray-500">N/A</span>
                     )}
                   </div>
                   
-                  <div className="flex items-center gap-2 inline-flex">
+                  <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-gray-600">Compartilhada:</span>
                     <span className={`text-sm font-bold px-3 py-1 rounded-full ${
                       porta.compartilhada ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
@@ -476,23 +478,10 @@ export default function DetalhesPorta() {
                     </span>
                   </div>
                   <div className="flex justify-between items-center p-4 bg-gray-50 rounded-lg border border-gray-100">
-                    <span className="text-sm font-medium text-gray-600">Sensor IMA:</span>
-                    <span className={`text-sm font-medium px-3 py-1 rounded-full ${
-                      porta.sensor_ima_status === 'aberto' ? 'bg-green-100 text-green-800' : 
-                      porta.sensor_ima_status === 'fechado' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {porta.sensor_ima_status || 'Desconhecido'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center p-4 bg-gray-50 rounded-lg border border-gray-100">
                     <span className="text-sm font-medium text-gray-600">Último Evento:</span>
                     <span className="text-sm font-bold text-gray-900">
                       {formatarData(porta.ultimo_evento_em)}
                     </span>
-                  </div>
-                  <div className="flex justify-between items-center p-4 bg-gray-50 rounded-lg border border-gray-100">
-                    <span className="text-sm font-medium text-gray-600">UID:</span>
-                    <span className="text-xs font-mono text-gray-900 bg-gray-200 px-3 py-1 rounded">{porta.uid}</span>
                   </div>
                 </div>
               </div>

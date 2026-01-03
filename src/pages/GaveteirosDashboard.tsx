@@ -8,23 +8,39 @@ import type { Bloco, Apartamento } from '../types/gaveteiro'
 import { useAuth } from '../contexts/AuthContext'
 import GaveteiroCompacto from '../components/gaveteiro/GaveteiroCompacto'
 
-// Formata tempo em minutos para exibição legível
+// Formata tempo em minutos para exibição legível - SEPARADO
 function formatarTempo(minutos: number): string {
   if (minutos < 60) return `${minutos}min`
   const horas = Math.floor(minutos / 60)
   const mins = minutos % 60
   if (horas < 24) return `${horas}h ${mins}min`
-  const dias = Math.floor(horas / 24)
-  const horasRestantes = horas % 24
+  
+  const dias = Math.floor(minutos / 1440)
+  const horasRestantes = Math.floor((minutos % 1440) / 60)
+  
+  // 🎨 Formato separado para dias
+  if (dias === 1 && horasRestantes === 0) return '1 dia'
+  if (dias === 1) return `1 dia ${horasRestantes}h`
+  if (horasRestantes === 0) return `${dias} dias`
   return `${dias}d ${horasRestantes}h`
 }
 
-// Retorna cor baseada no tempo de ocupação
+// Retorna cor baseada no tempo de ocupação - CORES MAIS DISCRETAS
 function getCorTempo(minutos: number): string {
+  const dias = Math.floor(minutos / 1440)
+  
   if (minutos < 60) return 'text-green-600 bg-green-50' // < 1h
   if (minutos < 240) return 'text-yellow-600 bg-yellow-50' // < 4h
   if (minutos < 1440) return 'text-orange-600 bg-orange-50' // < 24h
-  return 'text-red-600 bg-red-50' // > 24h
+  
+  // 🎨 CORES MAIS DISCRETAS PARA DIAS
+  if (dias === 1) return 'text-amber-700 bg-amber-50' // 1 dia
+  if (dias === 2) return 'text-orange-700 bg-orange-50' // 2 dias
+  if (dias === 3) return 'text-red-700 bg-red-50' // 3 dias
+  if (dias === 4) return 'text-red-800 bg-red-100' // 4 dias
+  if (dias === 5) return 'text-stone-700 bg-stone-50' // 5 dias
+  if (dias === 6) return 'text-stone-800 bg-stone-100' // 6 dias
+  return 'text-stone-900 bg-stone-200' // 7+ dias (cinza escuro)
 }
 
 // Formatar destinatários agrupando por bloco
@@ -436,12 +452,18 @@ export default function GaveteirosDashboard() {
               </div>
             </div>
 
-            {/* Legenda */}
+            {/* Legenda com cores mais discretas */}
             <div className="px-4 py-2 bg-gray-50 border-b flex flex-wrap gap-4 text-xs">
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-500"></span> &lt; 1h</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-yellow-500"></span> 1-4h</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-500"></span> 4-24h</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-500"></span> &gt; 24h</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-600"></span> 1 dia</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-600"></span> 2 dias</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-600"></span> 3 dias</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-700"></span> 4 dias</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-stone-600"></span> 5 dias</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-stone-700"></span> 6 dias</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-stone-800"></span> 7+ dias</span>
             </div>
 
             {/* Lista */}

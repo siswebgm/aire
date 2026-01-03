@@ -13,7 +13,7 @@ function MainLayout({ children }: { children: React.ReactNode }) {
   const [menuAberto, setMenuAberto] = useState(false)
 
   return (
-    <div className={`${isTotem ? 'bg-slate-50' : 'bg-transparent'} flex flex-col min-h-screen w-full`}>
+    <div className={`${isTotem ? 'bg-slate-50' : 'bg-gray-50/80'} flex flex-col min-h-screen w-full`}>
       <header
         className={
           isTotem
@@ -47,7 +47,7 @@ function MainLayout({ children }: { children: React.ReactNode }) {
                   <circle cx="7.5" cy="34" r="2.5" fill="#dc2626"/>
                 </svg>
               </div>
-              <h1 className="text-lg sm:text-xl font-extrabold tracking-widest uppercase" style={{ fontFamily: "'Montserrat', 'Inter', sans-serif", letterSpacing: '0.15em' }}>AIRE</h1>
+              <h1 className="text-lg sm:text-xl font-extrabold tracking-widest uppercase text-white drop-shadow-2xl" style={{ fontFamily: "'Montserrat', 'Inter', sans-serif", letterSpacing: '0.15em', textShadow: '3px 3px 6px rgba(0,0,0,0.8), 0 0 20px rgba(255,255,255,0.3)' }}>AIRE</h1>
             </div>
             
             {usuario && (
@@ -202,7 +202,7 @@ function MainLayout({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
 
-      <main className="w-full p-2 sm:p-4 lg:p-6 flex-1 overflow-x-hidden">
+      <main className="w-full p-2 sm:p-4 lg:p-6 flex-1 overflow-x-hidden bg-gray-50/50">
         <div className="w-full max-w-full">
           {children}
         </div>

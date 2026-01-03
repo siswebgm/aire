@@ -9,7 +9,7 @@
 #include <esp_task_wdt.h>
 
 /* =====================================================
-   CONFIGURAÇÕES GERAIS
+   ESP32 COM DHCP E DESCOBERTA AUTOMÁTICA
    ===================================================== */
 
 // Token SHA256
@@ -19,18 +19,14 @@
 #define TIMEOUT_WIFI 10000
 #define INTERVALO_VERIFICACAO_WIFI 30000
 #define INTERVALO_LOG_SISTEMA 300000
+#define INTERVALO_ANUNCIO 60000 // 1 minuto
 
-// WiFi (fallback)
+// WiFi (sem IP fixo)
 const char* WIFI_SSID = "NEW LINK - CAMILLA 2G";
 const char* WIFI_PASSWORD = "NG147068";
 
-// Ethernet W5500
+// Ethernet (DHCP - sem IP fixo)
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip_ethernet(192,168,1,100);
-IPAddress gateway(192,168,1,1);
-IPAddress subnet(255,255,255,0);
-IPAddress dns(8,8,8,8);
-
 #define ETH_CS_PIN  15
 #define ETH_RST_PIN -1
 
@@ -73,6 +69,27 @@ unsigned long sensorUltimoDebounce[NUM_PORTAS] = {0};
 
 unsigned long ultimaVerificacaoWiFi = 0;
 unsigned long ultimoLogSistema = 0;
+unsigned long ultimoAnuncio = 0;
+
+// Identificação do dispositivo
+String deviceId = "";
+String deviceName = "";
+String currentIP = "";
+String hostname = "";
+
+/* =====================================================
+   GERAÇÃO DE ID ÚNICO
+   ===================================================== */
+String gerarDeviceId() {
+  uint64_t chipid = ESP.getEfuseMac();
+  String id = "";
+  for (int i = 0; i < 6; i++) {
+    if (chipid >> (8 * (5 - i)) & 0xFF) {
+      id += String((chipid >> (8 * (5 - i)) & 0xFF), HEX);
+    }
+  }
+  return id.toUpperCase();
+}
 
 /* =====================================================
    SHA256
@@ -83,11 +100,7 @@ String sha256(String input) {
 
   mbedtls_sha256_init(&ctx);
   mbedtls_sha256_starts(&ctx, 0);
-  mbedtls_sha256_update(
-    &ctx,
-    (const unsigned char*)input.c_str(),
-    input.length()
-  );
+  mbedtls_sha256_update(&ctx, (const unsigned char*)input.c_str(), input.length());
   mbedtls_sha256_finish(&ctx, hash);
   mbedtls_sha256_free(&ctx);
 
@@ -100,14 +113,119 @@ String sha256(String input) {
 }
 
 /* =====================================================
-   FUNÇÕES DE PORTA
+   CONEXÃO COM DHCP
+   ===================================================== */
+bool conectarEthernet() {
+  Serial.println("[AIRE] Tentando conectar Ethernet (DHCP)...");
+  
+  SPI.begin();
+  Ethernet.init(ETH_CS_PIN);
+  
+  // Usa DHCP em vez de IP fixo
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("[AIRE] ❌ Falha no DHCP Ethernet");
+    return false;
+  }
+  
+  delay(1000);
+  
+  if (Ethernet.linkStatus() == LinkON) {
+    currentIP = Ethernet.localIP().toString();
+    Serial.println("[AIRE] ✅ Ethernet conectada via DHCP!");
+    Serial.print("[AIRE] IP: ");
+    Serial.println(currentIP);
+    conexaoAtiva = ETHERNET;
+    return true;
+  }
+  
+  Serial.println("[AIRE] ❌ Link Ethernet desconectado");
+  return false;
+}
+
+bool conectarWiFi() {
+  Serial.println("[AIRE] Conectando ao WiFi (DHCP)...");
+  Serial.println("[AIRE] SSID: " + String(WIFI_SSID));
+
+  // Configura hostname baseado no ID
+  hostname = "AIRE-ESP32-" + deviceId;
+  WiFi.setHostname(hostname.c_str());
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_WIFI) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    currentIP = WiFi.localIP().toString();
+    Serial.println("\n[AIRE] ✅ WiFi conectado via DHCP!");
+    Serial.print("[AIRE] IP: ");
+    Serial.println(currentIP);
+    Serial.print("[AIRE] Hostname: ");
+    Serial.println(hostname);
+    Serial.print("[AIRE] RSSI: ");
+    Serial.println(WiFi.RSSI());
+    
+    conexaoAtiva = WIFI;
+    return true;
+  }
+
+  Serial.println("\n[AIRE] ❌ Falha na conexão WiFi");
+  return false;
+}
+
+void verificarConexaoWiFi() {
+  if (conexaoAtiva == WIFI && WiFi.status() != WL_CONNECTED && millis() - ultimaVerificacaoWiFi > INTERVALO_VERIFICACAO_WIFI) {
+    Serial.println("[AIRE] WiFi desconectado, tentando reconectar automaticamente...");
+    if (conectarWiFi()) {
+      Serial.println("[AIRE] ✅ Reconexão WiFi bem-sucedida!");
+    } else {
+      Serial.println("[AIRE] ❌ Falha na reconexão WiFi");
+    }
+    ultimaVerificacaoWiFi = millis();
+  }
+}
+
+/* =====================================================
+   SISTEMA DE ANÚNCIO E DESCOBERTA
+   ===================================================== */
+void anunciarDispositivo() {
+  if (millis() - ultimoAnuncio > INTERVALO_ANUNCIO && currentIP != "") {
+    // Envia anúncio via broadcast
+    WiFiUDP udp;
+    if (udp.begin(8889) == 1) {
+      String anuncio = "{"
+        "\"type\":\"anuncio\","
+        "\"device\":\"" + deviceName + "\","
+        "\"id\":\"" + deviceId + "\","
+        "\"ip\":\"" + currentIP + "\","
+        "\"hostname\":\"" + hostname + "\","
+        "\"conexao\":\"" + String(conexaoAtiva == ETHERNET ? "ethernet" : "wifi") + "\","
+        "\"timestamp\":" + String(millis()) +
+        "}";
+      
+      udp.beginPacket("255.255.255.255", 8889);
+      udp.write(anuncio.c_str());
+      udp.endPacket();
+      
+      Serial.println("[AIRE] 📡 Anúncio enviado: " + deviceName + " (" + currentIP + ")");
+      ultimoAnuncio = millis();
+    }
+  }
+}
+
+/* =====================================================
+   FUNÇÕES DE PORTA (mesmas do original)
    ===================================================== */
 
 void abrirPorta(int porta) {
   int i = porta - 1;
   if (i < 0 || i >= NUM_PORTAS) return;
 
-  mcp.digitalWrite(8 + i, RELE_LIGADO); // GPB
+  mcp.digitalWrite(8 + i, RELE_LIGADO);
   portaAberta[i] = true;
   pulsoAtivo[i] = true;
   tempoInicioPulso[i] = millis();
@@ -138,14 +256,10 @@ void verificarPulsos() {
   }
 }
 
-/* =====================================================
-   SENSORES (MCP)
-   ===================================================== */
-
 void atualizarSensores() {
   unsigned long agora = millis();
   for (int i = 0; i < NUM_PORTAS; i++) {
-    bool leitura = (mcp.digitalRead(i) == LOW); // GPA
+    bool leitura = (mcp.digitalRead(i) == LOW);
 
     if (leitura != sensorEstadoAnterior[i] &&
         agora - sensorUltimoDebounce[i] > SENSOR_DEBOUNCE_MS) {
@@ -163,7 +277,7 @@ void atualizarSensores() {
 }
 
 /* =====================================================
-   AUTENTICAÇÃO MELHORADA
+   AUTENTICAÇÃO
    ===================================================== */
 
 bool autorizado() {
@@ -186,126 +300,33 @@ bool autorizadoResetWifi() {
   return server.arg("token") == WIFI_RESET_TOKEN;
 }
 
-bool auth() {
-  if (!server.hasHeader("Authorization")) return false;
-  return server.header("Authorization") == "Bearer teste";
-}
-
 /* =====================================================
-   WIFI MELHORADO
+   ROTAS COM DESCOBERTA
    ===================================================== */
 
-bool conectarWiFiSalvo() {
-  prefs.begin("wifi", true);
-  String ssid = prefs.getString("ssid", WIFI_SSID);
-  String pass = prefs.getString("pass", WIFI_PASSWORD);
-  prefs.end();
-
-  if (ssid == "") {
-    Serial.println("[AIRE] Usando WiFi padrão");
-    ssid = WIFI_SSID;
-    pass = WIFI_PASSWORD;
-  }
-
-  Serial.println("[AIRE] Conectando ao WiFi...");
-  Serial.println("[AIRE] SSID: " + ssid);
-
-  // Tenta conectar múltiplas vezes
-  for (int tentativa = 1; tentativa <= MAX_TENTATIVAS_WIFI; tentativa++) {
-    Serial.printf("[AIRE] Tentativa %d/%d\n", tentativa, MAX_TENTATIVAS_WIFI);
-    
-    WiFi.disconnect(true);
-    delay(500);
-    
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-
-    unsigned long inicio = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_WIFI) {
-      delay(500);
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\n[AIRE] WiFi conectado com sucesso!");
-      Serial.print("[AIRE] IP: ");
-      Serial.println(WiFi.localIP());
-      Serial.print("[AIRE] RSSI: ");
-      Serial.println(WiFi.RSSI());
-      
-      conexaoAtiva = WIFI;
-      return true;
-    }
-
-    Serial.printf("\n[AIRE] Falha na tentativa %d\n", tentativa);
-    if (tentativa < MAX_TENTATIVAS_WIFI) {
-      delay(2000); // Espera antes de próxima tentativa
-    }
-  }
-
-  Serial.println("[AIRE] Todas as tentativas WiFi falharam");
-  return false;
+void handleDiscovery() {
+  String json = "{"
+    "\"device\":\"" + deviceName + "\","
+    "\"id\":\"" + deviceId + "\","
+    "\"ip\":\"" + currentIP + "\","
+    "\"hostname\":\"" + hostname + "\","
+    "\"conexao\":\"" + String(conexaoAtiva == ETHERNET ? "ethernet" : conexaoAtiva == WIFI ? "wifi" : "nenhuma") + "\","
+    "\"status\":\"online\","
+    "\"uptime\":" + String(millis() / 1000) + ","
+    "\"memoria_livre\":" + String(ESP.getFreeHeap()) + ","
+    "\"timestamp\":" + String(millis()) +
+    "}";
+  
+  server.send(200, "application/json", json);
 }
-
-void verificarConexaoWiFi() {
-  if (conexaoAtiva == WIFI && WiFi.status() != WL_CONNECTED && millis() - ultimaVerificacaoWiFi > INTERVALO_VERIFICACAO_WIFI) {
-    Serial.println("[AIRE] WiFi desconectado, tentando reconectar automaticamente...");
-    if (conectarWiFiSalvo()) {
-      Serial.println("[AIRE] Reconexão WiFi bem-sucedida!");
-    } else {
-      Serial.println("[AIRE] Falha na reconexão WiFi");
-    }
-    ultimaVerificacaoWiFi = millis();
-  }
-}
-
-/* =====================================================
-   LOG DO SISTEMA
-   ===================================================== */
-
-void logSistema() {
-  Serial.println("[AIRE] === STATUS DO SISTEMA ===");
-  Serial.println("[AIRE] Conexão: " + String(conexaoAtiva == ETHERNET ? "Ethernet" : conexaoAtiva == WIFI ? "WiFi" : "Nenhuma"));
-  
-  if (conexaoAtiva == WIFI) {
-    Serial.println("[AIRE] IP WiFi: " + WiFi.localIP().toString());
-    Serial.println("[AIRE] SSID: " + WiFi.SSID());
-    Serial.println("[AIRE] RSSI: " + String(WiFi.RSSI()) + " dBm");
-  } else if (conexaoAtiva == ETHERNET) {
-    Serial.println("[AIRE] IP Ethernet: " + Ethernet.localIP().toString());
-  }
-  
-  Serial.println("[AIRE] Uptime: " + String(millis() / 1000) + "s");
-  Serial.println("[AIRE] Memória Livre: " + String(ESP.getFreeHeap()) + " bytes");
-  
-  int portasAbertasCount = 0;
-  int sensoresFechadosCount = 0;
-  for (int i = 0; i < NUM_PORTAS; i++) {
-    if (portaAberta[i]) portasAbertasCount++;
-    if (sensorFechado[i]) sensoresFechadosCount++;
-  }
-  
-  Serial.println("[AIRE] Portas abertas: " + String(portasAbertasCount) + "/" + String(NUM_PORTAS));
-  Serial.println("[AIRE] Sensores fechados: " + String(sensoresFechadosCount) + "/" + String(NUM_PORTAS));
-  Serial.println("[AIRE] ===========================");
-}
-
-/* =====================================================
-   ROTAS MELHORADAS
-   ===================================================== */
 
 void handleStatus() {
-  // Autenticação dupla: Bearer token OU SHA256
-  bool autenticado = auth() || autorizado();
-  
-  if (!autenticado) {
-    server.send(401, "application/json", "{\"erro\":\"nao_autorizado\"}");
-    return;
-  }
-
   String json = "{"
     "\"conexao\":\"" + String(conexaoAtiva == ETHERNET ? "ethernet" : conexaoAtiva == WIFI ? "wifi" : "nenhuma") + "\","
-    "\"ip\":\"" + (conexaoAtiva == ETHERNET ? Ethernet.localIP().toString() : WiFi.localIP().toString()) + "\"";
+    "\"ip\":\"" + currentIP + "\","
+    "\"hostname\":\"" + hostname + "\","
+    "\"device\":\"" + deviceName + "\","
+    "\"id\":\"" + deviceId + "\"";
   
   if (conexaoAtiva == WIFI) {
     json += ",\"ssid\":\"" + WiFi.SSID() + "\","
@@ -332,10 +353,7 @@ void handleStatus() {
 }
 
 void handleAbrir() {
-  // Autenticação dupla
-  bool autenticado = auth() || autorizado();
-  
-  if (!autenticado) {
+  if (!autorizado()) {
     server.send(401, "application/json", "{\"erro\":\"nao_autorizado\"}");
     return;
   }
@@ -357,10 +375,7 @@ void handleAbrir() {
 }
 
 void handleFechar() {
-  // Autenticação dupla
-  bool autenticado = auth() || autorizado();
-  
-  if (!autenticado) {
+  if (!autorizado()) {
     server.send(401, "application/json", "{\"erro\":\"nao_autorizado\"}");
     return;
   }
@@ -381,114 +396,73 @@ void handleFechar() {
   server.send(200, "application/json", response);
 }
 
-void handleConfigWifi() {
-  if (!autorizadoResetWifi()) {
-    server.send(403, "application/json", "{\"erro\":\"reset_nao_autorizado\"}");
-    return;
+void handleIdentify() {
+  Serial.println("[AIRE] 🔍 REQUISIÇÃO DE IDENTIFICAÇÃO RECEBIDA");
+  
+  // Pisca LED builtin para identificação física
+  for(int i = 0; i < 5; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(200);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(200);
   }
-
-  if (!server.hasArg("ssid") || !server.hasArg("password")) {
-    server.send(400, "application/json", "{\"erro\":\"dados_invalidos\"}");
-    return;
-  }
-
-  String ssid = server.arg("ssid");
-  String pass = server.arg("password");
   
-  Serial.println("[AIRE] Configurando WiFi:");
-  Serial.println("[AIRE] SSID: " + ssid);
-  Serial.println("[AIRE] Senha: " + String(pass.length()) + " caracteres");
-
-  prefs.begin("wifi", false);
-  prefs.putString("ssid", ssid);
-  prefs.putString("pass", pass);
-  prefs.end();
-
-  Serial.println("[AIRE] ✅ WiFi salvo, reiniciando...");
-  
-  server.send(200, "application/json", "{\"ok\":true,\"msg\":\"wifi_salvo_reiniciando\"}");
-
-  delay(1200);
-  ESP.restart();
-}
-
-void handleResetWifi() {
-  if (!autorizadoResetWifi()) {
-    server.send(403, "application/json", "{\"erro\":\"reset_nao_autorizado\"}");
-    return;
-  }
-
-  Serial.println("[AIRE] ✅ Reset autorizado, limpando configurações...");
-  
-  prefs.begin("wifi", false);
-  prefs.clear();
-  prefs.end();
-
-  Serial.println("[AIRE] ✅ WiFi resetado, reiniciando...");
-  
-  server.send(200, "application/json", "{\"ok\":true,\"msg\":\"wifi_resetado_reiniciando\"}");
-
-  delay(1200);
-  ESP.restart();
+  String response = "{\"ok\":true,\"message\":\"Device identificado: " + deviceName + "\",\"led_blink\":true}";
+  server.send(200, "application/json", response);
 }
 
 /* =====================================================
-   CONEXÕES MELHORADAS
+   LOG DO SISTEMA
    ===================================================== */
-
-bool conectarEthernet() {
-  Serial.println("[AIRE] Tentando conectar Ethernet...");
+void logSistema() {
+  Serial.println("[AIRE] === STATUS DO SISTEMA ===");
+  Serial.println("[AIRE] Device: " + deviceName);
+  Serial.println("[AIRE] ID: " + deviceId);
+  Serial.println("[AIRE] Hostname: " + hostname);
+  Serial.println("[AIRE] Conexão: " + String(conexaoAtiva == ETHERNET ? "Ethernet" : conexaoAtiva == WIFI ? "WiFi" : "Nenhuma"));
+  Serial.println("[AIRE] IP: " + currentIP);
   
-  SPI.begin();
-  Ethernet.init(ETH_CS_PIN);
-  Ethernet.begin(mac, ip_ethernet, dns, gateway, subnet);
-  delay(1000);
-  
-  if (Ethernet.linkStatus() == LinkON) {
-    Serial.println("[AIRE] ✅ Ethernet conectado!");
-    Serial.print("[AIRE] IP Ethernet: ");
-    Serial.println(Ethernet.localIP());
-    conexaoAtiva = ETHERNET;
-    return true;
+  if (conexaoAtiva == WIFI) {
+    Serial.println("[AIRE] SSID: " + WiFi.SSID());
+    Serial.println("[AIRE] RSSI: " + String(WiFi.RSSI()) + " dBm");
   }
   
-  Serial.println("[AIRE] ❌ Falha na conexão Ethernet");
-  return false;
-}
-
-bool conectarWiFi() {
-  Serial.println("[AIRE] Tentando conectar WiFi...");
-  
-  if (conectarWiFiSalvo()) {
-    conexaoAtiva = WIFI;
-    return true;
-  }
-  
-  Serial.println("[AIRE] ❌ Falha na conexão WiFi");
-  return false;
+  Serial.println("[AIRE] Uptime: " + String(millis() / 1000) + "s");
+  Serial.println("[AIRE] Memória Livre: " + String(ESP.getFreeHeap()) + " bytes");
+  Serial.println("[AIRE] ===========================");
 }
 
 /* =====================================================
-   SETUP MELHORADO
+   SETUP
    ===================================================== */
-
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("\n=== AIRE ESP32 HÍBRIDO INICIANDO ===");
-  Serial.println("[AIRE] Versão: 2.0 com reconexão automática");
-  Serial.println("[AIRE] Número de portas: " + String(NUM_PORTAS));
+  // Configura LED builtin
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  Serial.println("\n=== AIRE ESP32 DHCP AUTOMÁTICO ===");
+  
+  // Gera identificação única
+  deviceId = gerarDeviceId();
+  deviceName = "AIRE-ESP32-" + deviceId;
+  hostname = "AIRE-ESP32-" + deviceId;
+  
+  Serial.println("[AIRE] Device ID: " + deviceId);
+  Serial.println("[AIRE] Device Name: " + deviceName);
+  Serial.println("[AIRE] Hostname: " + hostname);
 
   // Inicializa watchdog
   esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 5000, // 5 segundos timeout
-    .idle_core_mask = 0, // Todos os cores
+    .timeout_ms = 5000,
+    .idle_core_mask = 0,
     .trigger_panic = true
   };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
-  Serial.println("[AIRE] Watchdog configurado (5s timeout)");
+  Serial.println("[AIRE] Watchdog configurado");
 
   // I2C
   Wire.begin(21, 22);
@@ -499,7 +473,7 @@ void setup() {
     Serial.println("[AIRE] MCP23017 encontrado");
   } else {
     Serial.println("[AIRE] ❌ MCP23017 não encontrado!");
-    while(1) delay(1000); // Trava se MCP não for encontrado
+    while(1) delay(1000);
   }
 
   // Configura portas do MCP
@@ -510,38 +484,43 @@ void setup() {
   }
   Serial.println("[AIRE] Portas MCP configuradas");
 
-  // Tenta conexões
-  Serial.println("[AIRE] Tentando conexões de rede...");
+  // Tenta conexões com DHCP
+  Serial.println("[AIRE] Tentando conexões com DHCP...");
   
   if(!conectarEthernet()) {
-    Serial.println("[AIRE] Ethernet falhou, tentando WiFi...");
+    Serial.println("[AIRE] Ethernet DHCP falhou, tentando WiFi DHCP...");
     if(!conectarWiFi()) {
-      Serial.println("[AIRE] ❌ Todas as conexões falharam, reiniciando...");
+      Serial.println("[AIRE] ❌ Todas as conexões DHCP falharam, reiniciando...");
       delay(5000);
       ESP.restart();
     }
   }
 
   // Configura servidor web
+  server.on("/discovery", handleDiscovery);
   server.on("/status", handleStatus);
   server.on("/abrir", handleAbrir);
   server.on("/fechar", handleFechar);
-  server.on("/config-wifi", HTTP_GET, handleConfigWifi);
-  server.on("/reset-wifi", HTTP_GET, handleResetWifi);
-  server.begin();
+  server.on("/identify", handleIdentify);
   
+  // Adiciona CORS
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  server.begin();
   Serial.println("[AIRE] Servidor HTTP iniciado na porta 80");
   
   // Log inicial
   logSistema();
   
-  Serial.println("[AIRE] ✅ Sistema pronto!");
+  Serial.println("[AIRE] ✅ Sistema DHCP pronto!");
+  Serial.println("[AIRE] Acesse: http://" + currentIP + "/discovery");
 }
 
 /* =====================================================
-   LOOP MELHORADO
+   LOOP
    ===================================================== */
-
 void loop() {
   verificarPulsos();
   atualizarSensores();
@@ -549,14 +528,24 @@ void loop() {
   // Verificar WiFi periodicamente
   verificarConexaoWiFi();
   
-  // Log do sistema periodicamente
+  // Anunciar dispositivo periodicamente
+  anunciarDispositivo();
+  
+  // Log periódico
   if (millis() - ultimoLogSistema > INTERVALO_LOG_SISTEMA) {
     logSistema();
     ultimoLogSistema = millis();
   }
   
-  // Reset do watchdog
+  // Reset watchdog
   esp_task_wdt_reset();
+  
+  // LED indica status
+  if (currentIP != "") {
+    digitalWrite(LED_BUILTIN, millis() % 2000 < 1000); // Piscando lento
+  } else {
+    digitalWrite(LED_BUILTIN, millis() % 500 < 250); // Piscando rápido
+  }
   
   server.handleClient();
   delay(10);

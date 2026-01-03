@@ -27,7 +27,7 @@ import { supabase } from '../../lib/supabaseClient'
 const ESP32_DEFAULT_TOKEN = process.env.NEXT_PUBLIC_ESP32_DEFAULT_TOKEN || null
 
 // Log de versão
-console.log('🟢 [VERSÃO] GaveteiroCompacto v5.0 - IP DINÂMICO POR GAVETEIRO')
+console.log('🟢 [VERSÃO] GaveteiroCompacto v5.1 - +24h NAS PORTAS DISPONÍVEIS')
 
 interface GaveteiroCompactoProps {
   gaveteiro: Gaveteiro
@@ -520,7 +520,12 @@ function PortaMini({
           <Package size={12} className="absolute top-1 left-1 opacity-60" />
         )}
         
-        <span className="text-lg font-bold">{porta.numero_porta}</span>
+        <div className="flex flex-col items-center">
+          <span className="text-lg font-bold">{porta.numero_porta}</span>
+          {porta.status_atual === 'DISPONIVEL' && (
+            <span className="text-xs text-yellow-300 mt-1 font-bold">+24h</span>
+          )}
+        </div>
         
         {/* Indicador de compartilhada */}
         {porta.compartilhada && (

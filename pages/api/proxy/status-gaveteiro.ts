@@ -21,7 +21,7 @@ export default async function handler(
 
     // Enviar requisição para o armário (server-side não tem CORS)
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 15000) // Aumentado para 15 segundos
+    const timeoutId = setTimeout(() => controller.abort(), 20000) // Aumentado para 20 segundos
 
     // Construir URL exata para log e resposta
     const exactURL = `http://${armarioIP}/status`
@@ -29,7 +29,13 @@ export default async function handler(
 
     const response = await fetch(exactURL, {
       method: 'GET',
-      signal: controller.signal
+      signal: controller.signal,
+      // Adicionar headers para melhor compatibilidade
+      headers: {
+        'User-Agent': 'GaveteiroManager/1.0',
+        'Accept': 'application/json, text/plain, */*',
+        'Connection': 'keep-alive'
+      }
     })
 
     clearTimeout(timeoutId)
@@ -69,18 +75,29 @@ export default async function handler(
     console.error('[PROXY] Erro ao verificar status:', error)
     
     let errorMessage = 'Erro ao comunicar com o armário'
+    let statusCode = 500
+    
     if (error instanceof Error) {
-      if (error.message.includes('ECONNREFUSED')) {
-        errorMessage = 'Armário não encontrado. Verifique o IP e a conexão.'
+      if (error.name === 'AbortError') {
+        errorMessage = 'Timeout na comunicação com o armário (20s). O ESP32 pode estar inicializando.'
+        statusCode = 408
+      } else if (error.message.includes('ECONNREFUSED') || error.message.includes('fetch failed')) {
+        errorMessage = 'ESP32 não encontrado. Verifique o IP e a conexão de rede. O dispositivo pode estar desligado ou em outro IP.'
+        statusCode = 503
+      } else if (error.message.includes('ENOTFOUND') || error.message.includes('getaddrinfo')) {
+        errorMessage = 'IP não encontrado na rede. Verifique se o ESP32 está conectado e se o IP está correto.'
+        statusCode = 503
       } else if (error.message.includes('timeout')) {
         errorMessage = 'Timeout na comunicação com o armário.'
+        statusCode = 408
       } else {
         errorMessage = error.message
       }
     }
 
-    return res.status(500).json({ 
-      error: errorMessage 
+    return res.status(statusCode).json({ 
+      error: errorMessage,
+      details: error instanceof Error ? error.message : 'Erro desconhecido'
     })
   }
 }

@@ -473,7 +473,46 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
     )
   }
 
-  // Carregar dados iniciais e configurar real-time
+  // 🎨 PRÉ-CARREGAR VOZES PARA ÁUDIO INSTANTÂNEO
+useEffect(() => {
+  if ('speechSynthesis' in window) {
+    // Força carregamento das vozes
+    window.speechSynthesis.getVoices()
+    
+    // Event listener para quando as vozes carregarem
+    const handleVoicesChanged = () => {
+      const voices = window.speechSynthesis.getVoices()
+      console.log('[TOTEM] Vozes carregadas:', voices.length)
+      
+      // Log vozes femininas disponíveis
+      const femaleVoices = voices.filter(voice => 
+        voice.lang.includes('pt-BR') && 
+        (voice.name.includes('Female') || 
+         voice.name.includes('Maria') || 
+         voice.name.includes('Camila') ||
+         voice.name.includes('Luciana') ||
+         voice.gender === 'female')
+      )
+      
+      if (femaleVoices.length > 0) {
+        console.log('[TOTEM] Vozes femininas disponíveis:', femaleVoices.map(v => v.name))
+      }
+    }
+    
+    window.speechSynthesis.onvoiceschanged = handleVoicesChanged
+    
+    // Timeout para garantir que as vozes foram carregadas
+    setTimeout(() => {
+      handleVoicesChanged()
+    }, 100)
+    
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null
+    }
+  }
+}, [])
+
+// Carregar dados iniciais e configurar real-time
   useEffect(() => {
     if (condominio?.uid) {
       carregarDados()
@@ -867,11 +906,35 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
           const hashArray = Array.from(new Uint8Array(hashBuffer))
           const token = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
           
-          // Usar IP direto se o código for um nome, ou usar o código diretamente se já for IP
-          let baseUrl = gaveteiro.codigo_hardware
-          if (!baseUrl.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-            // Se não for um IP, assume que é um nome e usa o IP padrão
-            baseUrl = '192.168.1.76'
+          // 🎨 USAR IP DINÂMICO DO BANCO (COMO AS OUTRAS PÁGINAS)
+          let baseUrl = '192.168.1.76' // fallback
+          
+          // Tentar buscar IP dinâmico do banco
+          try {
+            const response = await fetch('/api/proxy/buscar-condominio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ condominioUid: condominio.uid })
+            })
+            
+            if (response.ok) {
+              const data = await response.json()
+              if (data.esp32Ip) {
+                baseUrl = data.esp32Ip
+                console.log('[TOTEM] Usando IP dinâmico do banco:', baseUrl)
+              }
+            }
+          } catch (error) {
+            console.warn('[TOTEM] Erro ao buscar IP dinâmico, usando fallback:', error)
+          }
+          
+          // Se o código for um nome, usar o IP dinâmico
+          if (!gaveteiro.codigo_hardware.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+            console.log('[TOTEM] Código não é IP, usando IP dinâmico:', baseUrl)
+          } else {
+            // Se for IP, usar o código diretamente
+            baseUrl = gaveteiro.codigo_hardware
+            console.log('[TOTEM] Código é IP, usando diretamente:', baseUrl)
           }
           
           const url = `http://${baseUrl}/abrir?condominio_uid=${condominio.uid}&porta_uid=${portaSelecionada.uid}&porta=${portaSelecionada.numero_porta}&token=${token}`
@@ -884,18 +947,96 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
           const img = new Image()
           img.src = url
           
+          // 🎨 TIMEOUT MAIS LONGO E MELHOR LOGGING
+          const timeout = setTimeout(() => {
+            console.log('[TOTEM] TIMEOUT: Requisição para ESP32 demorou demais (10s)')
+            console.log('[TOTEM] URL tentada:', url)
+            console.log('[TOTEM] ESP32 pode estar offline ou IP incorreto')
+            
+            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
+            if ('speechSynthesis' in window) {
+              console.log('[TOTEM] Reproduzindo áudio mesmo com timeout...')
+              
+              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
+              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
+              utterance.lang = 'pt-BR'
+              utterance.rate = 1.8      // 🎨 Mais rápido (era 1.5)
+              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
+              utterance.volume = 1.0
+              
+              // 🎨 ESCOLHER VOZ FEMININA SE DISPONÍVEL
+              const voices = window.speechSynthesis.getVoices()
+              const femaleVoice = voices.find(voice => 
+                voice.lang.includes('pt-BR') && 
+                (voice.name.includes('Female') || 
+                 voice.name.includes('Maria') || 
+                 voice.name.includes('Camila') ||
+                 voice.name.includes('Luciana') ||
+                 voice.gender === 'female')
+              )
+              
+              if (femaleVoice) {
+                utterance.voice = femaleVoice
+                console.log('[TOTEM] Usando voz feminina:', femaleVoice.name)
+              } else {
+                // Fallback para qualquer voz brasileira
+                const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
+                if (brazilianVoice) {
+                  utterance.voice = brazilianVoice
+                  console.log('[TOTEM] Usando voz brasileira:', brazilianVoice.name)
+                }
+              }
+              
+              // 🎨 PRÉ-CARREGAR VOZES SE NECESSÁRIO
+              if (voices.length === 0) {
+                window.speechSynthesis.getVoices()
+                setTimeout(() => {
+                  window.speechSynthesis.cancel()
+                  window.speechSynthesis.speak(utterance)
+                }, 100)
+              } else {
+                window.speechSynthesis.cancel()
+                window.speechSynthesis.speak(utterance)
+              }
+              
+              console.log('[TOTEM] Áudio configurado com voz feminina e velocidade aumentada')
+            } else {
+              console.warn('[TOTEM] Síntese de voz não disponível')
+            }
+          }, 10000) // 10 segundos
+          
           img.onerror = (error) => {
             console.log('[TOTEM] Requisição enviada (pode ter falhado silenciosamente)')
             console.log('[TOTEM DEBUG] Image onerror:', error)
             
-            // Reproduz áudio mesmo que a requisição falhe
+            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
             if ('speechSynthesis' in window) {
               console.log('[TOTEM] Tentando reproduzir áudio (onerror)...')
+              
+              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
               const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
               utterance.lang = 'pt-BR'
-              utterance.rate = 1.5
-              utterance.pitch = 1
-              utterance.volume = 1
+              utterance.rate = 1.8      // 🎨 Mais rápido
+              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
+              utterance.volume = 1.0
+              
+              // 🎨 ESCOLHER VOZ FEMININA
+              const voices = window.speechSynthesis.getVoices()
+              const femaleVoice = voices.find(voice => 
+                voice.lang.includes('pt-BR') && 
+                (voice.name.includes('Female') || 
+                 voice.name.includes('Maria') || 
+                 voice.name.includes('Camila') ||
+                 voice.name.includes('Luciana') ||
+                 voice.gender === 'female')
+              )
+              
+              if (femaleVoice) {
+                utterance.voice = femaleVoice
+              } else {
+                const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
+                if (brazilianVoice) utterance.voice = brazilianVoice
+              }
               
               utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
               utterance.onend = () => console.log('[TOTEM] Áudio terminou')
@@ -911,15 +1052,36 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
           
           img.onload = () => {
             console.log('[TOTEM] Porta aberta com sucesso!')
+            clearTimeout(timeout)
             
-            // Reproduz áudio anunciando que a porta está aberta
+            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
             if ('speechSynthesis' in window) {
               console.log('[TOTEM] Tentando reproduzir áudio (onload)...')
+              
+              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
               const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
               utterance.lang = 'pt-BR'
-              utterance.rate = 1.5
-              utterance.pitch = 1
-              utterance.volume = 1
+              utterance.rate = 1.8      // 🎨 Mais rápido
+              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
+              utterance.volume = 1.0
+              
+              // 🎨 ESCOLHER VOZ FEMININA
+              const voices = window.speechSynthesis.getVoices()
+              const femaleVoice = voices.find(voice => 
+                voice.lang.includes('pt-BR') && 
+                (voice.name.includes('Female') || 
+                 voice.name.includes('Maria') || 
+                 voice.name.includes('Camila') ||
+                 voice.name.includes('Luciana') ||
+                 voice.gender === 'female')
+              )
+              
+              if (femaleVoice) {
+                utterance.voice = femaleVoice
+              } else {
+                const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
+                if (brazilianVoice) utterance.voice = brazilianVoice
+              }
               
               utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
               utterance.onend = () => console.log('[TOTEM] Áudio terminou')

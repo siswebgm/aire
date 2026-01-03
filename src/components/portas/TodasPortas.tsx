@@ -6,6 +6,23 @@ import { listarTodasPortas, ocuparPorta, liberarPortaComSenha, cancelarOcupacao,
 import { useAuth } from '../../contexts/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 
+// 🎨 Formata tempo em minutos para exibição legível - SEPARADO
+function formatarTempo(minutos: number): string {
+  if (minutos < 60) return `${minutos}min`
+  const horas = Math.floor(minutos / 60)
+  const mins = minutos % 60
+  if (horas < 24) return `${horas}h ${mins}min`
+  
+  const dias = Math.floor(minutos / 1440)
+  const horasRestantes = Math.floor((minutos % 1440) / 60)
+  
+  // 🎨 Formato separado para dias
+  if (dias === 1 && horasRestantes === 0) return '1d'
+  if (dias === 1) return `1d ${horasRestantes}h`
+  if (horasRestantes === 0) return `${dias}d`
+  return `${dias}d ${horasRestantes}h`
+}
+
 interface PortaDetalhada extends Porta {
   gaveteiro_nome?: string
   gaveteiro_codigo?: string
@@ -202,29 +219,14 @@ export default function TodasPortas() {
   const getCorPorta = (porta: PortaDetalhada) => {
     if (porta.status_atual === 'DISPONIVEL') return 'bg-green-500 hover:bg-green-600 text-white'
     if (porta.status_atual === 'OCUPADO') {
-      // Verificar se está ocupada há mais de 24 horas
-      if (porta.ocupado_em) {
-        const horasOcupada = (new Date().getTime() - new Date(porta.ocupado_em).getTime()) / (1000 * 60 * 60)
-        if (horasOcupada > 24) {
-          return 'bg-orange-600 hover:bg-orange-700 text-white border-2 border-orange-800' // Laranja para >24h
-        }
-      }
+      // Apenas vermelho para ocupadas
       return 'bg-red-500 hover:bg-red-600 text-white'
     }
     return 'bg-gray-300 text-gray-500 cursor-not-allowed'
   }
 
   const getIndicadorLongaOcupacao = (porta: PortaDetalhada) => {
-    if (porta.status_atual === 'OCUPADO' && porta.ocupado_em) {
-      const horasOcupada = (new Date().getTime() - new Date(porta.ocupado_em).getTime()) / (1000 * 60 * 60)
-      if (horasOcupada > 24) {
-        return (
-          <div className="absolute top-1 right-1 w-4 h-4 border-2 border-red-500 rounded-full animate-pulse bg-red-100 shadow-[0_2px_4px_rgba(0,0,0,0.3),0_4px_8px_rgba(239,68,68,0.4),inset_0_1px_2px_rgba(255,255,255,0.8)] flex items-center justify-center" title="Ocupada há mais de 24h">
-            <span className="text-[0.6rem]">🔴</span>
-          </div>
-        )
-      }
-    }
+    // 🎨 NÃO PRECISA MAIS DO INDICADOR JÁ QUE O TEMPO APARECE NA PORTA
     return null
   }
 
@@ -263,14 +265,14 @@ export default function TodasPortas() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-gradient-to-r from-sky-50 to-blue-50 rounded-xl p-4 shadow-sm border border-sky-200">
+      <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 shadow-md border border-gray-200">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
               <DoorOpen size={20} />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-sky-800">Todas as Portas</h1>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-sky-600 to-cyan-600 bg-clip-text text-transparent">Todas as Portas</h1>
               <p className="text-sm text-sky-600">
                 {portas.length} portas totais • {portas.filter(p => p.status_atual === 'DISPONIVEL').length} disponíveis • {portas.filter(p => p.status_atual === 'OCUPADO').length} ocupadas
               </p>
@@ -335,18 +337,29 @@ export default function TodasPortas() {
               className={`relative group aspect-square rounded-sm text-xs font-bold transition-all duration-200 cursor-pointer ${getCorPorta(porta)}`}
               onClick={() => abrirDetalhesPorta(porta)}
             >
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-base font-bold">{porta.numero_porta}</span>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                {porta.status_atual === 'OCUPADO' && porta.ocupado_em && (
+                  (() => {
+                    const minutosOcupada = (new Date().getTime() - new Date(porta.ocupado_em).getTime()) / (1000 * 60)
+                    const dias = Math.floor(minutosOcupada / 1440)
+                    
+                    if (dias >= 1) {
+                      // 🎨 NÚMERO GRANDE, TEMPO PEQUENO (SEM REPETIÇÃO)
+                      return (
+                        <div className="flex flex-col items-center justify-center">
+                          <span className="text-base font-bold">{porta.numero_porta}</span>
+                          <span className="text-[8px] text-white font-medium leading-tight opacity-80">
+                            {formatarTempo(minutosOcupada)}
+                          </span>
+                        </div>
+                      )
+                    }
+                    return <span className="text-base font-bold">{porta.numero_porta}</span>
+                  })()
+                ) || <span className="text-base font-bold">{porta.numero_porta}</span>}
               </div>
               
-              {/* Indicadores */}
-              {porta.compartilhada && (
-                <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-purple-500 rounded-full border border-white"></div>
-              )}
-              {(porta.bloco_atual || porta.apartamento_atual) && (
-                <div className="absolute top-0.5 left-0.5 w-1.5 h-1.5 bg-blue-500 rounded-full border border-white"></div>
-              )}
-              {getIndicadorLongaOcupacao(porta)}
+              {/* 🎨 SEM INDICADORES VISUAIS - APENAS CORES E TEMPO */}
               
               {/* Status da fechadura */}
               {porta.fechadura_status && porta.fechadura_status === 'aberta' && (
@@ -362,7 +375,7 @@ export default function TodasPortas() {
                     🔓
                   </span>
                 </div>
-            )}
+              )}
             </div>
           ))}
         </div>

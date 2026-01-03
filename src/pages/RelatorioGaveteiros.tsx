@@ -41,8 +41,15 @@ const formatarTempo = (min: number): string => {
   const h = Math.floor(min / 60)
   const m = min % 60
   if (h < 24) return `${h}h ${m}min`
-  const d = Math.floor(h / 24)
-  return `${d}d ${h % 24}h`
+  
+  const dias = Math.floor(min / 1440)
+  const horasRestantes = Math.floor((min % 1440) / 60)
+  
+  // 🎨 Formato separado para dias - MESMA LÓGICA
+  if (dias === 1 && horasRestantes === 0) return '1 dia'
+  if (dias === 1) return `1 dia ${horasRestantes}h`
+  if (horasRestantes === 0) return `${dias} dias`
+  return `${dias}d ${horasRestantes}h`
 }
 
 // Formata destinatários (prioriza JSON, fallback para campos texto)

@@ -7,12 +7,19 @@ export default function ConfigurarESP32() {
   const [ssid, setSsid] = useState('')
   const [password, setPassword] = useState('')
   const [espIP, setEspIP] = useState('192.168.4.1')
-  const [armarioIP, setArmarioIP] = useState('192.168.1.76')
+  const [armarioIP, setArmarioIP] = useState('')  // ✅ Começa vazio, será preenchido pelo banco
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ success: boolean; message: string; exactURL?: string } | null>(null)
   const [resetResult, setResetResult] = useState<{ success: boolean; message: string; exactURL?: string } | null>(null)
   const [gaveteiroStatus, setGaveteiroStatus] = useState<{ modo: string; ip: string } | null>(null)
   const [checkingStatus, setCheckingStatus] = useState(false)
+  const [diagnosticando, setDiagnosticando] = useState(false)
+  const [diagnostico, setDiagnostico] = useState<{problema: string, solucoes: string[], detalhes: string} | null>(null)
+  const [sistemaUrl, setSistemaUrl] = useState('http://app.contatoaire.com')
+  const [buscandoIPs, setBuscandoIPs] = useState(false)
+  const [ipsEncontrados, setIpsEncontrados] = useState<string[]>([])
+  const [testandoIPs, setTestandoIPs] = useState(false)
+  const [resultadosTeste, setResultadosTeste] = useState<{ip: string, online: boolean}[]>([])
   const [currentNetwork, setCurrentNetwork] = useState<string>('')
   const [statusResponse, setStatusResponse] = useState<string>('')
   const [showResetConfirm, setShowResetConfirm] = useState(false)
@@ -84,6 +91,9 @@ export default function ConfigurarESP32() {
               nome: condominioData.nome || 'Condomínio não identificado',
               esp32Ip: condominioData.esp32Ip || '192.168.1.76'
             })
+            // ✅ Atualizar armarioIP com o IP do banco de dados
+            setArmarioIP(condominioData.esp32Ip || '192.168.1.76')
+            console.log(`[CONFIG] IP do condomínio carregado: ${condominioData.esp32Ip || '192.168.1.76'}`)
           }
         } catch (error) {
           console.log('Erro ao buscar condomínio, usando valores padrão')
@@ -91,6 +101,9 @@ export default function ConfigurarESP32() {
             nome: 'Condomínio não identificado',
             esp32Ip: '192.168.1.76'
           })
+          // ✅ Usar IP padrão também em caso de erro
+          setArmarioIP('192.168.1.76')
+          console.log('[CONFIG] Usando IP padrão devido a erro: 192.168.1.76')
         }
         
         // Buscar informações do usuário (se disponível)
@@ -108,6 +121,9 @@ export default function ConfigurarESP32() {
           nome: 'Condomínio não identificado',
           esp32Ip: '192.168.1.76'
         })
+        // ✅ Usar IP padrão também no catch final
+        setArmarioIP('192.168.1.76')
+        console.log('[CONFIG] Usando IP padrão no catch final: 192.168.1.76')
       }
     }
     
@@ -237,13 +253,620 @@ export default function ConfigurarESP32() {
     }
   }
 
+  // Função para testar se o sistema está acessível
+  const testarConexaoSistema = async (): Promise<boolean> => {
+    try {
+      setStatusResponse('Testando conexão com o sistema...')
+      
+      const response = await fetch('/api/proxy/buscar-gaveteiros', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sistemaUrl: sistemaUrl
+        })
+      })
+      
+      if (response.ok) {
+        setStatusResponse('✅ Sistema acessível!')
+        return true
+      } else {
+        const errorData = await response.json()
+        setStatusResponse(`❌ Erro ${response.status}: ${errorData.message || errorData.error}`)
+        return false
+      }
+    } catch (error: any) {
+      setStatusResponse(`❌ Erro de conexão: ${error.message}`)
+      return false
+    }
+  }
+
+  // Função para buscar IP do ESP32 através da URL do sistema
+  const buscarIPDoSistema = async (sistemaUrl: string): Promise<string[]> => {
+    try {
+      console.log(`[SYSTEM_IP] Buscando IPs do sistema: ${sistemaUrl}`)
+      
+      // Usar proxy do Next.js para evitar CORS
+      const response = await fetch('/api/proxy/buscar-gaveteiros', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sistemaUrl: sistemaUrl
+        })
+      })
+      
+      if (!response.ok) {
+        // Tenta ler detalhes do erro
+        let errorDetails = ''
+        try {
+          const errorData = await response.json()
+          errorDetails = errorData.error || errorData.message || 'Erro desconhecido'
+        } catch {
+          errorDetails = 'Não foi possível ler detalhes do erro'
+        }
+        
+        console.error(`[SYSTEM_IP] Erro ${response.status}:`, errorDetails)
+        throw new Error(`Erro ao buscar gaveteiros: ${response.status} - ${errorDetails}`)
+      }
+      
+      const data = await response.json()
+      const gaveteiros = data.gaveteiros || []
+      console.log(`[SYSTEM_IP] Gaveteiros encontrados:`, gaveteiros.length)
+      
+      // Extrair IPs dos gaveteiros
+      const ips = gaveteiros
+        .filter((g: any) => g.esp32_ip || g.codigo_hardware)
+        .map((g: any) => {
+          // Priorizar esp32_ip, senão tentar extrair IP do codigo_hardware
+          if (g.esp32_ip) return g.esp32_ip
+          
+          // Se codigo_hardware for um IP, usar ele
+          if (g.codigo_hardware && /^\d+\.\d+\.\d+\.\d+$/.test(g.codigo_hardware)) {
+            return g.codigo_hardware
+          }
+          
+          return null
+        })
+        .filter((ip: string | null) => ip !== null)
+      
+      console.log(`[SYSTEM_IP] IPs extraídos:`, ips)
+      return ips
+      
+    } catch (error: any) {
+      console.error('[SYSTEM_IP] Erro ao buscar IPs do sistema:', error)
+      
+      // Se já for um erro tratado, repassa
+      if (error.message.includes('Erro ao buscar gaveteiros')) {
+        throw error
+      }
+      
+      // Erros de rede/conexão
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        throw new Error('Erro de conexão com o proxy. Verifique se o servidor está online.')
+      }
+      
+      throw new Error(`Erro inesperado: ${error.message}`)
+    }
+  }
+
+  // Função para escanear rede em busca de ESP32s
+  const escanearRede = async (): Promise<string[]> => {
+    setStatusResponse('Escaneando rede em busca de ESP32s...')
+    
+    try {
+      // Usa o proxy para scan de rede
+      const response = await fetch('/api/proxy/scan-network', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Erro no scan: ${response.status}`)
+      }
+      
+      const data = await response.json()
+      
+      if (data.success && data.devices && data.devices.length > 0) {
+        setStatusResponse(`${data.devices.length} ESP32s encontrados na rede`)
+        
+        // Extrai IPs dos dispositivos encontrados
+        const ips = data.devices.map((d: any) => d.ip)
+        console.log(`[SCAN] IPs encontrados:`, ips)
+        
+        return ips
+      }
+      
+      // Se não encontrou via scan, tenta ranges comuns
+      setStatusResponse('Testando ranges de rede comuns...')
+      const commonRanges = [
+        '192.168.1', '192.168.0', '192.168.2', 
+        '10.0.0', '172.16.0'
+      ]
+      
+      for (const range of commonRanges) {
+        const ips = await testarRange(range)
+        if (ips.length > 0) {
+          setStatusResponse(`${ips.length} ESP32s encontrados em ${range}.x`)
+          return ips
+        }
+      }
+      
+      setStatusResponse('Nenhum ESP32 encontrado na rede')
+      return []
+      
+    } catch (error) {
+      console.error('[SCAN] Erro ao escanear rede:', error)
+      setStatusResponse('Erro ao escanear rede. Tente novamente.')
+      return []
+    }
+  }
+
+  // Função para testar um range de IPs
+  const testarRange = async (range: string): Promise<string[]> => {
+    const ipsEncontrados: string[] = []
+    const promises = []
+    
+    // Testa IPs de 1 a 254 (limitado para não sobrecarregar)
+    for (let i = 1; i <= 50; i++) {
+      const ip = `${range}.${i}`
+      promises.push(testarIP(ip, ipsEncontrados))
+    }
+    
+    await Promise.all(promises)
+    return ipsEncontrados
+  }
+
+  // Função para testar um IP específico
+  const testarIP = async (ip: string, ipsEncontrados: string[]): Promise<void> => {
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 2000)
+      
+      const response = await fetch(`http://${ip}/discovery`, {
+        signal: controller.signal
+      })
+      
+      clearTimeout(timeoutId)
+      
+      if (response.ok) {
+        const data = await response.json()
+        if (data.device && data.device.startsWith('AIRE-ESP32-')) {
+          ipsEncontrados.push(ip)
+          console.log(`[SCAN] ✅ ESP32 encontrado: ${data.device} (${ip})`)
+        }
+      }
+    } catch (error) {
+      // Silenciosamente ignora falhas
+    }
+  }
+
+  // Função para testar múltiplos IPs automaticamente
+  const testarIPsAutomaticamente = async (ips: string[]): Promise<{ip: string, online: boolean}[]> => {
+    const resultados = []
+    
+    for (const ip of ips) {
+      try {
+        console.log(`[AUTO_TEST] Testando IP: ${ip}`)
+        
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 5000) // 5s por IP
+        
+        const response = await fetch(`/api/proxy/status-gaveteiro`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ armarioIP: ip }),
+          signal: controller.signal
+        })
+        
+        clearTimeout(timeoutId)
+        
+        if (response.ok) {
+          const data = await response.json()
+          resultados.push({ ip, online: true })
+          console.log(`[AUTO_TEST] ✅ ${ip} - Online: ${data.armarioResponse || 'OK'}`)
+        } else {
+          resultados.push({ ip, online: false })
+          console.log(`[AUTO_TEST] ❌ ${ip} - Erro HTTP: ${response.status}`)
+        }
+        
+      } catch (error) {
+        resultados.push({ ip, online: false })
+        console.log(`[AUTO_TEST] ❌ ${ip} - Falha: ${error instanceof Error ? error.message : 'Erro'}`)
+      }
+    }
+    
+    return resultados
+  }
+
+  // Função completa de diagnóstico para identificar o problema específico
+  const diagnosticarProblema = async (ip: string): Promise<{problema: string, solucoes: string[], detalhes: string}> => {
+    console.log(`[DIAGNOSTIC] Iniciando diagnóstico completo para ${ip}`)
+    
+    const resultados = []
+    
+    // 1. Verificar formato do IP
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/
+    if (!ipRegex.test(ip)) {
+      return {
+        problema: 'IP inválido',
+        solucoes: [
+          'Verifique se o IP está no formato correto (ex: 192.168.1.76)',
+          'Use um IP válido na mesma rede do computador'
+        ],
+        detalhes: `O IP "${ip}" não está no formato válido XXX.XXX.XXX.XXX`
+      }
+    }
+    
+    // 2. Tentar diferentes métodos de conexão
+    const metodos = [
+      { nome: 'Status Endpoint', url: `/api/proxy/status-gaveteiro`, timeout: 8000 },
+      { nome: 'Ping Básico', url: `/api/proxy/status-gaveteiro`, timeout: 5000 }
+    ]
+    
+    for (const metodo of metodos) {
+      try {
+        console.log(`[DIAGNOSTIC] Testando ${metodo.nome}...`)
+        
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), metodo.timeout)
+        
+        const response = await fetch(metodo.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ armarioIP: ip }),
+          signal: controller.signal
+        })
+        
+        clearTimeout(timeoutId)
+        
+        if (response.ok) {
+          const data = await response.json()
+          return {
+            problema: 'Conexão bem-sucedida',
+            solucoes: [],
+            detalhes: `${metodo.nome}: Dispositivo respondeu corretamente. Resposta: ${data.armarioResponse || 'OK'}`
+          }
+        } else {
+          const errorData = await response.json().catch(() => ({}))
+          resultados.push(`${metodo.nome}: Erro HTTP ${response.status} - ${errorData.error || 'Sem detalhes'}`)
+        }
+        
+      } catch (error) {
+        if (error instanceof Error) {
+          if (error.name === 'AbortError') {
+            resultados.push(`${metodo.nome}: Timeout (${metodo.timeout}ms)`)
+          } else if (error.message.includes('fetch failed')) {
+            resultados.push(`${metodo.nome}: Falha de rede/conexão`)
+          } else {
+            resultados.push(`${metodo.nome}: ${error.message}`)
+          }
+        } else {
+          resultados.push(`${metodo.nome}: Erro desconhecido`)
+        }
+      }
+    }
+    
+    // 3. Analisar resultados para identificar problema específico
+    const todosTimeout = resultados.every(r => r.includes('Timeout'))
+    const todosFalhaRede = resultados.every(r => r.includes('Falha de rede'))
+    
+    if (todosTimeout) {
+      return {
+        problema: 'Timeout em todas as tentativas',
+        solucoes: [
+          'Verifique se o ESP32 está ligado e conectado à rede',
+          'Espere mais tempo para o ESP32 inicializar (pode levar até 2 minutos)',
+          'Verifique se o IP está correto',
+          'Tente fazer ping do computador para o ESP32',
+          'Verifique se o ESP32 está na mesma rede WiFi'
+        ],
+        detalhes: `O dispositivo não respondeu em nenhum dos testes. Resultados: ${resultados.join(', ')}`
+      }
+    }
+    
+    if (todosFalhaRede) {
+      return {
+        problema: 'Falha de rede',
+        solucoes: [
+          'Verifique se o computador está na mesma rede que o ESP32',
+          'Desative temporariamente o firewall/antivírus',
+          'Verifique se o roteador está bloqueando conexões locais',
+          'Tente usar outro dispositivo na mesma rede',
+          'Verifique se o ESP32 realmente está conectado ao WiFi'
+        ],
+        detalhes: `Falha de rede em todos os testes. Resultados: ${resultados.join(', ')}`
+      }
+    }
+    
+    return {
+      problema: 'Problema misto ou desconhecido',
+      solucoes: [
+        'Verifique se o ESP32 está ligado',
+        'Confirme o IP correto do dispositivo',
+        'Verifique a conexão de rede',
+        'Reinicie o ESP32',
+        'Verifique o console do ESP32 para erros'
+      ],
+      detalhes: `Resultados dos testes: ${resultados.join(', ')}`
+    }
+  }
+
+  // Função para verificar conectividade básica com o ESP32
+  const verificarConectividadeBasica = async (ip: string): Promise<{online: boolean, details: string}> => {
+    try {
+      console.log(`[CONNECTIVITY] Testando conectividade básica com ${ip}`)
+      
+      // 🔍 SE FOR IP PADRÃO, TENTAR DESCOBERTA AUTOMÁTICA
+      let ipParaTestar = ip
+      if (ip === '192.168.1.76') {
+        console.log('[CONNECTIVITY] IP padrão detectado, tentando descoberta automática...')
+        
+        // Tentar IPs próximos
+        const ipsParaTestar = ['192.168.1.75', '192.168.1.74', '192.168.1.77']
+        
+        for (const ipTeste of ipsParaTestar) {
+          try {
+            console.log(`[CONNECTIVITY] Testando IP: ${ipTeste}`)
+            // 🔧 USAR PROXY PARA EVITAR CORS
+            const testResponse = await fetch(`/api/proxy/testar-discovery`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                ip: ipTeste
+              }),
+              signal: AbortSignal.timeout(2000)
+            })
+            
+            if (testResponse.ok) {
+              const data = await testResponse.json()
+              if (data.success && data.device && data.device.includes('AIRE-ESP32')) {
+                console.log(`[CONNECTIVITY] ✅ ESP32 encontrado em: ${ipTeste}`)
+                ipParaTestar = ipTeste
+                break
+              }
+            }
+          } catch (error) {
+            console.log(`[CONNECTIVITY] ❌ IP ${ipTeste} não respondeu`)
+          }
+        }
+      }
+      
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000) // 8 segundos para ping básico
+
+      const response = await fetch(`/api/proxy/status-gaveteiro`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          armarioIP: ipParaTestar  // ✅ Usar IP descoberto
+        }),
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+      
+      // Se receber qualquer resposta (mesmo erro), o dispositivo está online
+      const data = await response.json()
+      
+      // 🔄 Se encontrou IP diferente, atualizar o estado
+      if (ipParaTestar !== ip) {
+        console.log(`[CONNECTIVITY] 🔄 Atualizando IP de ${ip} para ${ipParaTestar}`)
+        setArmarioIP(ipParaTestar)  // Atualiza o IP no frontend
+      }
+      
+      if (response.ok) {
+        return { 
+          online: true, 
+          details: `Dispositivo respondeu corretamente. Resposta: ${data.armarioResponse || 'OK'}` 
+        }
+      } else {
+        // Se recebeu erro HTTP mas o dispositivo respondeu, está online mas com problema
+        return { 
+          online: true, 
+          details: `Dispositivo online mas retornou erro: ${data.error || 'Erro desconhecido'}` 
+        }
+      }
+      
+    } catch (error) {
+      console.log(`[CONNECTIVITY] Dispositivo ${ip} não responde:`, error)
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          return { 
+            online: false, 
+            details: `Timeout de 8s. O ESP32 pode estar inicializando ou muito lento.` 
+          }
+        } else if (error.message.includes('fetch failed')) {
+          return { 
+            online: false, 
+            details: `Falha de rede. Verifique se o computador está na mesma rede que o ESP32.` 
+          }
+        } else {
+          return { 
+            online: false, 
+            details: `Erro de conexão: ${error.message}` 
+          }
+        }
+      }
+      
+      return { 
+        online: false, 
+        details: 'Erro desconhecido na verificação de conectividade' 
+      }
+    }
+  }
+
+  // Função para buscar IPs do sistema
+  const buscarIPsDoSistema = async () => {
+    setBuscandoIPs(true)
+    setIpsEncontrados([])
+    setResultadosTeste([])
+    setStatusResponse('Buscando IPs do sistema...')
+    
+    try {
+      const ips = await buscarIPDoSistema(sistemaUrl)
+      setIpsEncontrados(ips)
+      
+      if (ips.length === 0) {
+        setStatusResponse('Nenhum ESP32 encontrado no sistema')
+        setResult({ 
+          success: false, 
+          message: 'Nenhum ESP32 encontrado no sistema. Verifique a URL ou tente escanear a rede.' 
+        })
+      } else {
+        setStatusResponse(`${ips.length} IPs encontrados: ${ips.join(', ')}`)
+        
+        // Testar automaticamente os IPs encontrados
+        await testarIPsEncontrados(ips)
+      }
+    } catch (error: any) {
+      console.error('Erro ao buscar IPs:', error)
+      setStatusResponse('Erro ao buscar IPs do sistema')
+      setResult({ 
+        success: false, 
+        message: `Erro ao buscar IPs: ${error.message || 'Erro desconhecido'}. Tente escanear a rede local.` 
+      })
+    } finally {
+      setBuscandoIPs(false)
+    }
+  }
+
+  // Função para escanear rede automaticamente
+  const escanearRedeAutomaticamente = async () => {
+    setBuscandoIPs(true)
+    setIpsEncontrados([])
+    setResultadosTeste([])
+    
+    try {
+      const ips = await escanearRede()
+      setIpsEncontrados(ips)
+      
+      if (ips.length === 0) {
+        setStatusResponse('Nenhum ESP32 encontrado na rede')
+        setResult({ 
+          success: false, 
+          message: 'Nenhum ESP32 encontrado na rede. Verifique se estão ligados e na mesma rede.' 
+        })
+      } else {
+        setStatusResponse(`${ips.length} ESP32s encontrados na rede`)
+        
+        // Testar automaticamente os IPs encontrados
+        await testarIPsEncontrados(ips)
+      }
+    } catch (error: any) {
+      console.error('Erro ao escanear rede:', error)
+      setStatusResponse('Erro ao escanear rede')
+      setResult({ 
+        success: false, 
+        message: `Erro ao escanear rede: ${error.message || 'Erro desconhecido'}. Tente novamente.` 
+      })
+    } finally {
+      setBuscandoIPs(false)
+    }
+  }
+
+  // Função para testar IPs encontrados
+  const testarIPsEncontrados = async (ips: string[]) => {
+    setTestandoIPs(true)
+    setStatusResponse('Testando conexão com os ESP32s...')
+    
+    try {
+      const resultados = await testarIPsAutomaticamente(ips)
+      setResultadosTeste(resultados)
+      
+      const onlineCount = resultados.filter(r => r.online).length
+      setStatusResponse(`${onlineCount}/${resultados.length} ESP32s online`)
+      
+      if (onlineCount > 0) {
+        // Usar o primeiro IP online como armarioIP
+        const primeiroIPOnline = resultados.find(r => r.online)?.ip
+        if (primeiroIPOnline) {
+          setArmarioIP(primeiroIPOnline)
+          setResult({ 
+            success: true, 
+            message: `${onlineCount} ESP32(s) encontrado(s)! Usando IP: ${primeiroIPOnline}` 
+          })
+        }
+      } else {
+        setResult({ 
+          success: false, 
+          message: 'Nenhum ESP32 online. Verifique se estão ligados e na mesma rede.' 
+        })
+      }
+    } catch (error) {
+      console.error('Erro ao testar IPs:', error)
+      setStatusResponse('Erro ao testar IPs')
+    } finally {
+      setTestandoIPs(false)
+    }
+  }
+
+  // Função para executar diagnóstico completo
+  const executarDiagnostico = async () => {
+    setDiagnosticando(true)
+    setDiagnostico(null)
+    setStatusResponse('Executando diagnóstico completo...')
+    
+    try {
+      const resultado = await diagnosticarProblema(armarioIP)
+      setDiagnostico(resultado)
+      setStatusResponse(`Diagnóstico: ${resultado.problema}`)
+      
+      if (resultado.problema === 'Conexão bem-sucedida') {
+        setResult({ 
+          success: true, 
+          message: 'ESP32 encontrado e respondendo corretamente!' 
+        })
+      } else {
+        setResult({ 
+          success: false, 
+          message: `Problema identificado: ${resultado.problema}` 
+        })
+      }
+    } catch (error) {
+      console.error('Erro no diagnóstico:', error)
+      setDiagnostico({
+        problema: 'Erro no diagnóstico',
+        solucoes: ['Tente novamente', 'Verifique a conexão', 'Reinicie o sistema'],
+        detalhes: error instanceof Error ? error.message : 'Erro desconhecido'
+      })
+    } finally {
+      setDiagnosticando(false)
+    }
+  }
+
+  // Função para verificar status do gaveteiro (mantida para uso interno do diagnóstico)
   const verificarStatusGaveteiro = async () => {
     setCheckingStatus(true)
     setGaveteiroStatus(null)
     setStatusResponse('')
 
     try {
-      // Usar proxy para verificar status do gaveteiro
+      // Primeiro verificar conectividade básica
+      const connectivityResult = await verificarConectividadeBasica(armarioIP)
+      console.log(`[CONNECTIVITY] Resultado:`, connectivityResult)
+      
+      if (!connectivityResult.online) {
+        setStatusResponse(connectivityResult.details)
+        throw new Error(`ESP32 não encontrado. ${connectivityResult.details}`)
+      }
+
+      // Se está online, mostrar detalhes da conectividade
+      setStatusResponse(connectivityResult.details)
+
+      // Usar proxy com timeout maior para verificar status do gaveteiro
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 20000) // 20 segundos
+
       const response = await fetch('/api/proxy/status-gaveteiro', {
         method: 'POST',
         headers: {
@@ -251,18 +874,34 @@ export default function ConfigurarESP32() {
         },
         body: JSON.stringify({
           armarioIP: armarioIP
-        })
+        }),
+        signal: controller.signal
       })
 
-      const data = await response.json()
+      clearTimeout(timeoutId)
+
+      // Se a resposta não for ok, mas tiver dados, tentar extrair informação útil
+      let data
+      try {
+        data = await response.json()
+      } catch (jsonError) {
+        console.warn('Resposta não é JSON válido:', jsonError)
+        data = { error: 'Resposta inválida do servidor' }
+      }
 
       if (!response.ok) {
         const errorMessage = data.error || `Erro HTTP ${response.status}: ${response.statusText}`
+        
+        // Se for erro de conexão, dar mensagem mais útil
+        if (response.status === 0 || errorMessage.includes('fetch failed')) {
+          throw new Error('ESP32 não encontrado. Verifique o IP e a conexão de rede. O dispositivo pode estar inicializando.')
+        }
+        
         throw new Error(errorMessage)
       }
 
       // Mostrar a resposta bruta do gaveteiro
-      setStatusResponse(data.armarioResponse || 'Sem resposta')
+      setStatusResponse(`${connectivityResult.details} | Status: ${data.armarioResponse || 'Sem resposta'}`)
 
       if (data.parsedResponse && data.parsedResponse.modo === 'wifi') {
         setGaveteiroStatus({
@@ -290,11 +929,13 @@ export default function ConfigurarESP32() {
       // Tratar especificamente erro de abort (timeout)
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
-          errorMessage = 'Timeout na comunicação com o gaveteiro. Verifique se o IP está correto e se o dispositivo está online.'
-          setStatusResponse('Timeout - Sem resposta do gaveteiro')
+          errorMessage = 'Timeout na comunicação com o gaveteiro. Verifique se o IP está correto e se o dispositivo está online. O ESP32 pode estar inicializando.'
+          setStatusResponse('Timeout - Sem resposta do gaveteiro (20s)')
+        } else if (error.message.includes('fetch failed')) {
+          errorMessage = 'ESP32 não encontrado. Verifique o IP e a conexão. O dispositivo pode estar inicializando ou desconectado.'
+          setStatusResponse('Falha na conexão - Verifique o IP e rede')
         } else {
           errorMessage = error.message
-          setStatusResponse(`Erro: ${error.message}`)
         }
       } else {
         setStatusResponse('Erro desconhecido na comunicação')
@@ -614,25 +1255,16 @@ export default function ConfigurarESP32() {
                     </div>
                   </div>
 
-                  {/* Botões de teste */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Botões de teste - APENAS DIAGNÓSTICO */}
+                  <div className="grid grid-cols-1 gap-4">
                     <button
                       type="button"
-                      onClick={testarConexao}
-                      disabled={loading}
-                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-gray-600 to-gray-700 text-white py-3 px-4 rounded-xl hover:from-gray-700 hover:to-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50 transition-all"
+                      onClick={executarDiagnostico}
+                      disabled={diagnosticando || checkingStatus}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-3 px-4 rounded-xl hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 transition-all"
                     >
-                      <Activity size={18} />
-                      {loading ? 'Testando...' : 'Testar Conexão'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={verificarStatusGaveteiro}
-                      disabled={checkingStatus}
-                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-3 px-4 rounded-xl hover:from-green-700 hover:to-emerald-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 transition-all"
-                    >
-                      <CheckCircle size={18} />
-                      {checkingStatus ? 'Verificando...' : 'Verificar Gaveteiro'}
+                      <AlertCircle size={18} />
+                      {diagnosticando ? 'Diagnosticando...' : 'Diagnóstico Completo'}
                     </button>
                   </div>
 
@@ -650,6 +1282,55 @@ export default function ConfigurarESP32() {
                           <p className="text-sm text-green-700">
                             Modo: {gaveteiroStatus.modo.toUpperCase()} | IP: {gaveteiroStatus.ip}
                           </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Resultado do Diagnóstico */}
+                  {diagnostico && (
+                    <div className={`border rounded-xl p-4 ${
+                      diagnostico.problema === 'Conexão bem-sucedida' 
+                        ? 'bg-green-50 border-green-200' 
+                        : 'bg-orange-50 border-orange-200'
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white ${
+                          diagnostico.problema === 'Conexão bem-sucedida' 
+                            ? 'bg-green-500' 
+                            : 'bg-orange-500'
+                        }`}>
+                          <AlertCircle size={20} />
+                        </div>
+                        <div className="flex-1">
+                          <p className={`text-sm font-semibold ${
+                            diagnostico.problema === 'Conexão bem-sucedida' 
+                              ? 'text-green-900' 
+                              : 'text-orange-900'
+                          }`}>
+                            {diagnostico.problema}
+                          </p>
+                          <p className={`text-xs mt-1 ${
+                            diagnostico.problema === 'Conexão bem-sucedida' 
+                              ? 'text-green-700' 
+                              : 'text-orange-700'
+                          }`}>
+                            {diagnostico.detalhes}
+                          </p>
+                          
+                          {diagnostico.solucoes.length > 0 && (
+                            <div className="mt-3">
+                              <p className="text-xs font-semibold text-orange-900 mb-2">Soluções sugeridas:</p>
+                              <ul className="text-xs text-orange-700 space-y-1">
+                                {diagnostico.solucoes.map((solucao, index) => (
+                                  <li key={index} className="flex items-start gap-2">
+                                    <span className="text-orange-500 mt-0.5">•</span>
+                                    <span>{solucao}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -740,6 +1421,77 @@ export default function ConfigurarESP32() {
 
               {/* Formulário de reset */}
               <div className="space-y-6">
+                {/* URL do Sistema para buscar IPs */}
+                <div>
+                  <label htmlFor="sistemaUrl" className="block text-sm font-medium text-gray-700 mb-2">
+                    URL do Sistema (para buscar IPs automaticamente)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      id="sistemaUrl"
+                      value={sistemaUrl}
+                      onChange={(e) => setSistemaUrl(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="http://app.contatoaire.com"
+                    />
+                    <button
+                      type="button"
+                      onClick={testarConexaoSistema}
+                      disabled={buscandoIPs || testandoIPs}
+                      className="px-3 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-md hover:from-yellow-600 hover:to-orange-600 disabled:opacity-50 transition-all"
+                      title="Testar se o sistema está acessível"
+                    >
+                      🔗
+                    </button>
+                    <button
+                      type="button"
+                      onClick={buscarIPsDoSistema}
+                      disabled={buscandoIPs || testandoIPs}
+                      className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-md hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all"
+                    >
+                      {buscandoIPs || testandoIPs ? 'Buscando...' : 'Buscar IPs'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={escanearRedeAutomaticamente}
+                      disabled={buscandoIPs || testandoIPs}
+                      className="px-4 py-2 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-md hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 transition-all"
+                    >
+                      {buscandoIPs || testandoIPs ? 'Escaneando...' : '🔍 Escanear Rede'}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    🔗 Testa conexão | Busca IPs do sistema | 🔍 Escaneia rede local em busca de ESP32s
+                  </p>
+                </div>
+
+                {/* Resultados da busca de IPs */}
+                {resultadosTeste.length > 0 && (
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-3">Resultados do Teste:</h4>
+                    <div className="space-y-2">
+                      {resultadosTeste.map((resultado, index) => (
+                        <div key={index} className="flex items-center justify-between p-2 bg-white rounded border">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full ${
+                              resultado.online ? 'bg-green-500' : 'bg-red-500'
+                            }`}></div>
+                            <span className="text-sm font-medium">{resultado.ip}</span>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded ${
+                            resultado.online 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {resultado.online ? 'Online' : 'Offline'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* IP do Armário */}
                 <div>
                   <label htmlFor="armarioIP" className="block text-sm font-medium text-gray-700">
@@ -755,7 +1507,7 @@ export default function ConfigurarESP32() {
                     required
                   />
                   <p className="mt-1 text-xs text-gray-500">
-                    IP do armário já conectado à sua rede WiFi
+                    IP do ESP32 já configurado na rede do condomínio
                   </p>
                 </div>
 
@@ -1039,7 +1791,6 @@ export default function ConfigurarESP32() {
             <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside">
               <li>Conecte-se à rede WiFi "ESP32-AP"</li>
               <li>Verifique se o IP está correto (padrão: 192.168.4.1)</li>
-              <li>Clique em "Testar Conexão" para confirmar</li>
               <li>Preencha SSID e senha da sua rede WiFi</li>
               <li>Clique em "Configurar WiFi"</li>
               <li>Aguarde o ESP32 reiniciar e conectar à sua rede</li>

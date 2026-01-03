@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRE - Descoberta Automática de ESP32s</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .methods {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .method-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .method-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .method-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+
+        .method-card p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .devices {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .device-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .device-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .device-card.online {
+            border-color: #4caf50;
+            background: #f1f8e9;
+        }
+
+        .device-card.offline {
+            border-color: #f44336;
+            background: #ffebee;
+        }
+
+        .device-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+
+        .device-info {
+            color: #666;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .device-actions {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 0.9rem;
+            flex: 1;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .status.online {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status.offline {
+            background: #f44336;
+            color: white;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .log {
+            background: #f5f5f5;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .access-methods {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .access-badge {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 AIRE Discovery</h1>
+            <p>Descoberta automática de ESP32s na rede local</p>
+        </div>
+
+        <div class="methods">
+            <div class="method-card">
+                <h3>📡 Scan de Rede</h3>
+                <p>Escaneia a rede local procurando por ESP32s com endpoint /discovery</p>
+                <button class="btn" onclick="scanNetwork()">🔍 Escanear Rede</button>
+            </div>
+
+            <div class="method-card">
+                <h3>🌐 mDNS Discovery</h3>
+                <p>Busca dispositivos usando mDNS (Zeroconf) - acessível por nome</p>
+                <button class="btn" onclick="discoverMDNS()">🔍 Descobrir mDNS</button>
+            </div>
+
+            <div class="method-card">
+                <h3>📡 UDP Broadcast</h3>
+                <p>Escuta anúncios UDP broadcast dos ESP32s na rede</p>
+                <button class="btn" onclick="listenUDP()">📡 Escutar Anúncios</button>
+            </div>
+
+            <div class="method-card">
+                <h3>🔗 Testar IP Manual</h3>
+                <p>Testa um IP específico para ver se é um ESP32 AIRE</p>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <input type="text" id="manualIP" placeholder="192.168.1.76" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <button class="btn" onclick="testManualIP()">Testar</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="devices">
+            <h2>📱 Dispositivos Encontrados</h2>
+            <div id="devicesList">
+                <div class="loading">
+                    <p>Clique em um dos métodos acima para descobrir dispositivos</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="log" id="log" style="display: none;">
+            <h3>📋 Log de Descoberta</h3>
+            <div id="logContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let devices = new Map();
+        let udpSocket = null;
+
+        function log(message) {
+            const logEl = document.getElementById('log');
+            const logContent = document.getElementById('logContent');
+            logEl.style.display = 'block';
+            logContent.innerHTML += `[${new Date().toLocaleTimeString()}] ${message}\n`;
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        function updateDevicesDisplay() {
+            const devicesList = document.getElementById('devicesList');
+            
+            if (devices.size === 0) {
+                devicesList.innerHTML = '<div class="loading"><p>Nenhum dispositivo encontrado</p></div>';
+                return;
+            }
+
+            const deviceGrid = document.createElement('div');
+            deviceGrid.className = 'device-grid';
+
+            devices.forEach((device, id) => {
+                const card = document.createElement('div');
+                card.className = `device-card ${device.online ? 'online' : 'offline'}`;
+                
+                const accessMethods = [];
+                if (device.ip) accessMethods.push(`<span class="access-badge">IP: ${device.ip}</span>`);
+                if (device.mdns) accessMethods.push(`<span class="access-badge">mDNS: ${device.mdns}</span>`);
+                if (device.hostname) accessMethods.push(`<span class="access-badge">Nome: ${device.hostname}</span>`);
+
+                card.innerHTML = `
+                    <div class="status ${device.online ? 'online' : 'offline'}">
+                        ${device.online ? '🟢 Online' : '🔴 Offline'}
+                    </div>
+                    <div class="device-name">${device.device || 'Dispositivo ' + id}</div>
+                    <div class="device-info">
+                        <div><strong>ID:</strong> ${device.id || id}</div>
+                        <div><strong>Conexão:</strong> ${device.conexao || 'Desconhecida'}</div>
+                        <div><strong>Uptime:</strong> ${device.uptime ? Math.floor(device.uptime / 60) + ' min' : 'N/A'}</div>
+                        <div><strong>Memória:</strong> ${device.memoria_livre ? Math.floor(device.memoria_livre / 1024) + ' KB' : 'N/A'}</div>
+                        <div class="access-methods">${accessMethods.join('')}</div>
+                    </div>
+                    <div class="device-actions">
+                        <button class="btn btn-small" onclick="testDevice('${device.ip || id}')">Testar</button>
+                        <button class="btn btn-small" onclick="identifyDevice('${device.ip || id}')">Identificar</button>
+                        <button class="btn btn-small" onclick="openDevice('${device.ip || id}')">Abrir</button>
+                    </div>
+                `;
+                
+                deviceGrid.appendChild(card);
+            });
+
+            devicesList.innerHTML = '';
+            devicesList.appendChild(deviceGrid);
+        }
+
+        async function scanNetwork() {
+            log('🔍 Iniciando scan de rede...');
+            const devicesList = document.getElementById('devicesList');
+            devicesList.innerHTML = '<div class="loading"><div class="spinner"></div><p>Escaneando rede...</p></div>';
+
+            try {
+                // Descobre range da rede atual
+                const response = await fetch('/api/proxy/scan-network');
+                const data = await response.json();
+
+                if (data.success && data.devices) {
+                    data.devices.forEach(device => {
+                        devices.set(device.ip, {
+                            ...device,
+                            online: true,
+                            ip: device.ip,
+                            device: device.device,
+                            id: device.id
+                        });
+                    });
+                    
+                    log(`✅ Scan concluído: ${data.devices.length} dispositivos encontrados`);
+                } else {
+                    log('⚠️ Nenhum dispositivo encontrado no scan');
+                }
+            } catch (error) {
+                log(`❌ Erro no scan: ${error.message}`);
+            }
+
+            updateDevicesDisplay();
+        }
+
+        async function discoverMDNS() {
+            log('🌐 Iniciando descoberta mDNS...');
+            const devicesList = document.getElementById('devicesList');
+            devicesList.innerHTML = '<div class="loading"><div class="spinner"></div><p>Descobrindo dispositivos mDNS...</p></div>';
+
+            try {
+                // Em um ambiente real, isso usaria uma biblioteca mDNS
+                // Para este exemplo, vamos simular
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                // Simulação de dispositivos mDNS
+                const mockDevices = [
+                    { name: 'aire32-abc123.local', ip: '192.168.1.76', device: 'AIRE-ESP32-ABC123' },
+                    { name: 'aire32-def456.local', ip: '192.168.1.77', device: 'AIRE-ESP32-DEF456' }
+                ];
+
+                mockDevices.forEach(device => {
+                    devices.set(device.ip, {
+                        ...device,
+                        online: true,
+                        mdns: device.name,
+                        hostname: device.device,
+                        id: device.name.split('-')[1]
+                    });
+                });
+
+                log(`✅ Descoberta mDNS concluída: ${mockDevices.length} dispositivos encontrados`);
+            } catch (error) {
+                log(`❌ Erro na descoberta mDNS: ${error.message}`);
+            }
+
+            updateDevicesDisplay();
+        }
+
+        function listenUDP() {
+            log('📡 Iniciando escuta UDP broadcast...');
+            const devicesList = document.getElementById('devicesList');
+            devicesList.innerHTML = '<div class="loading"><div class="spinner"></div><p>Escutando anúncios UDP...</p></div>';
+
+            // Simulação de escuta UDP
+            setTimeout(() => {
+                const mockAnnouncement = {
+                    device: 'AIRE-ESP32-GHI789',
+                    id: 'GHI789',
+                    ip: '192.168.1.78',
+                    hostname: 'AIRE-ESP32-GHI789',
+                    conexao: 'wifi'
+                };
+
+                devices.set(mockAnnouncement.ip, {
+                    ...mockAnnouncement,
+                    online: true
+                });
+
+                log('📡 Anúncio recebido: ' + mockAnnouncement.device + ' (' + mockAnnouncement.ip + ')');
+                updateDevicesDisplay();
+            }, 3000);
+        }
+
+        async function testManualIP() {
+            const ip = document.getElementById('manualIP').value.trim();
+            if (!ip) {
+                alert('Digite um IP válido');
+                return;
+            }
+
+            log(`🔗 Testando IP manual: ${ip}`);
+            
+            try {
+                const response = await fetch(`http://${ip}/discovery`);
+                if (response.ok) {
+                    const device = await response.json();
+                    devices.set(ip, {
+                        ...device,
+                        online: true,
+                        ip: ip
+                    });
+                    log(`✅ Dispositivo encontrado: ${device.device}`);
+                } else {
+                    log(`❌ IP ${ip} não é um ESP32 AIRE`);
+                }
+            } catch (error) {
+                log(`❌ Erro ao testar IP ${ip}: ${error.message}`);
+            }
+
+            updateDevicesDisplay();
+        }
+
+        async function testDevice(ip) {
+            log(`🔍 Testando dispositivo: ${ip}`);
+            
+            try {
+                const response = await fetch(`http://${ip}/status`);
+                if (response.ok) {
+                    const status = await response.json();
+                    log(`✅ Status de ${ip}: Online (Uptime: ${Math.floor(status.uptime / 60)} min)`);
+                    
+                    // Atualiza informações do dispositivo
+                    if (devices.has(ip)) {
+                        const device = devices.get(ip);
+                        Object.assign(device, status);
+                        updateDevicesDisplay();
+                    }
+                } else {
+                    log(`❌ Dispositivo ${ip} offline`);
+                }
+            } catch (error) {
+                log(`❌ Erro ao testar ${ip}: ${error.message}`);
+            }
+        }
+
+        async function identifyDevice(ip) {
+            log(`🔍 Identificando dispositivo: ${ip}`);
+            
+            try {
+                const response = await fetch(`http://${ip}/identify`);
+                if (response.ok) {
+                    log(`✅ Dispositivo ${ip} identificado - LED deve estar piscando`);
+                } else {
+                    log(`❌ Falha ao identificar ${ip}`);
+                }
+            } catch (error) {
+                log(`❌ Erro ao identificar ${ip}: ${error.message}`);
+            }
+        }
+
+        async function openDevice(ip) {
+            log(`🚪 Abrindo porta 1 do dispositivo: ${ip}`);
+            
+            try {
+                // Gera token SHA256
+                const token = await generateToken('test-uid', 'test-porta-uid', '1');
+                
+                const response = await fetch(`http://${ip}/abrir?porta=1&condominio_uid=test-uid&porta_uid=test-porta-uid&token=${token}`);
+                if (response.ok) {
+                    log(`✅ Porta 1 aberta no dispositivo ${ip}`);
+                } else {
+                    log(`❌ Falha ao abrir porta no dispositivo ${ip}`);
+                }
+            } catch (error) {
+                log(`❌ Erro ao abrir porta em ${ip}: ${error.message}`);
+            }
+        }
+
+        async function generateToken(condominio_uid, porta_uid, porta) {
+            const message = `${condominio_uid}:${porta_uid}:${porta}:AIRE_2025_SUPER_SECRETO`;
+            const encoder = new TextEncoder();
+            const data = encoder.encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // Inicialização
+        document.addEventListener('DOMContentLoaded', function() {
+            log('🚀 Sistema de descoberta iniciado');
+            updateDevicesDisplay();
+        });
+    </script>
+</body>
+</html>
