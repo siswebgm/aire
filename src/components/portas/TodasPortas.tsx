@@ -324,13 +324,13 @@ export default function TodasPortas() {
 
       {/* Grid de Portas */}
       {loading ? (
-        <div className="grid grid-cols-8 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-14 xl:grid-cols-16 gap-0.5">
+        <div className="grid grid-cols-10 sm:grid-cols-12 md:grid-cols-14 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(i => (
             <div key={i} className="aspect-square bg-gray-200 rounded-sm animate-pulse" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-8 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-14 xl:grid-cols-16 gap-0.5">
+        <div className="grid grid-cols-10 sm:grid-cols-12 md:grid-cols-14 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
           {portasFiltradas.map((porta) => (
             <div
               key={porta.uid}
@@ -347,30 +347,30 @@ export default function TodasPortas() {
                       // 🎨 NÚMERO GRANDE, TEMPO PEQUENO (SEM REPETIÇÃO)
                       return (
                         <div className="flex flex-col items-center justify-center">
-                          <span className="text-base font-bold">{porta.numero_porta}</span>
-                          <span className="text-[8px] text-white font-medium leading-tight opacity-80">
+                          <span className="text-sm font-bold">{porta.numero_porta}</span>
+                          <span className="text-[6px] text-white font-medium leading-tight opacity-80">
                             {formatarTempo(minutosOcupada)}
                           </span>
                         </div>
                       )
                     }
-                    return <span className="text-base font-bold">{porta.numero_porta}</span>
+                    return <span className="text-sm font-bold">{porta.numero_porta}</span>
                   })()
-                ) || <span className="text-base font-bold">{porta.numero_porta}</span>}
+                ) || <span className="text-sm font-bold">{porta.numero_porta}</span>}
               </div>
               
               {/* 🎨 SEM INDICADORES VISUAIS - APENAS CORES E TEMPO */}
               
               {/* Status da fechadura */}
               {porta.fechadura_status && porta.fechadura_status === 'aberta' && (
-                <div className={`absolute bottom-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-xs font-medium ${getCorStatusFechadura(porta.fechadura_status)}`}>
+                <div className={`absolute bottom-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-[6px] font-medium ${getCorStatusFechadura(porta.fechadura_status)}`}>
                   Aberta
                 </div>
               )}
               
               {/* Status do sensor */}
               {porta.sensor_ima_status && porta.sensor_ima_status === 'aberto' && (
-                <div className="absolute top-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-xs font-medium bg-white/90 backdrop-blur-sm">
+                <div className="absolute top-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-[6px] font-medium bg-white/90 backdrop-blur-sm">
                   <span className={getCorStatusSensor(porta.sensor_ima_status)}>
                     🔓
                   </span>
