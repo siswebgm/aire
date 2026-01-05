@@ -444,11 +444,13 @@ export default function AbrirPortaPublico() {
         {/* Logo/Header */}
         <div className="mb-6">
           <div className="text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-full mb-3">
-              <Package className="w-8 h-8 text-white" />
+            <div className="flex items-center justify-center gap-3">
+              <div className="inline-flex items-center justify-center w-12 h-12 bg-white/10 rounded-full">
+                <Package className="w-6 h-6 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold text-white">Retirada de Encomenda</h1>
             </div>
-            <h1 className="text-2xl font-bold text-white mb-2">Retirada de Encomenda</h1>
-            <p className="text-white/70">Digite sua senha para abrir a porta</p>
+            <p className="text-white/70 mt-2">Digite sua senha para abrir a porta</p>
           </div>
         </div>
 
@@ -571,7 +573,7 @@ export default function AbrirPortaPublico() {
                     )}
 
                     {metodo === 'senha' && (
-                      <div className="mb-6">
+                      <div className="mb-4">
                         <label className="block text-sm font-medium text-gray-600 mb-2">
                           <KeyRound className="w-4 h-4 inline mr-1" />
                           Senha de Retirada
@@ -588,7 +590,7 @@ export default function AbrirPortaPublico() {
                           onClick={showKeypadIfKiosk}
                           onChange={handleSenhaChange}
                           onKeyPress={handleKeyPress}
-                          placeholder="Digite a senha"
+                          placeholder={isKiosk ? 'Senha' : 'Digite a senha'}
                           className={`w-full text-center text-3xl font-mono tracking-widest py-4 px-6 border-2 rounded-xl focus:outline-none focus:ring-2 transition-all ${
                             status === 'erro'
                               ? 'border-red-300 focus:border-red-500 focus:ring-red-200 bg-red-50'
@@ -597,7 +599,7 @@ export default function AbrirPortaPublico() {
                         />
 
                         {showKioskKeypad && metodo === 'senha' && (status === 'idle' || status === 'erro' || status === 'validando' || status === 'abrindo') && (
-                          <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                          <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
                             <div className="text-[11px] font-extrabold tracking-widest text-slate-400">COMO RETIRAR</div>
                             <div className="mt-2 text-xs font-semibold text-slate-600">
                               <ol className="list-decimal list-inside space-y-1">
@@ -612,7 +614,7 @@ export default function AbrirPortaPublico() {
                     )}
 
                     {isKiosk && metodo === 'senha' && showKioskKeypad && (
-                      <div className="mt-4 flex items-center justify-center">
+                      <div className="mt-3 flex items-center justify-center">
                         <div className="inline-flex items-center rounded-2xl bg-slate-100 p-1 border border-slate-200">
                           <button
                             type="button"
@@ -749,7 +751,7 @@ export default function AbrirPortaPublico() {
                         type="button"
                         disabled={kioskSenhaProcessando}
                         onClick={() => keypadDigit(d)}
-                        className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 text-xl font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
+                        className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 text-xl font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center leading-none ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
                       >
                         {d}
                       </button>
@@ -758,7 +760,7 @@ export default function AbrirPortaPublico() {
                       type="button"
                       disabled={kioskSenhaProcessando}
                       onClick={keypadBackspace}
-                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
+                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center leading-none ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
                     >
                       Apagar
                     </button>
@@ -766,7 +768,7 @@ export default function AbrirPortaPublico() {
                       type="button"
                       disabled={kioskSenhaProcessando}
                       onClick={() => keypadDigit('0')}
-                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 text-xl font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
+                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-900 text-xl font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center leading-none ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
                     >
                       0
                     </button>
@@ -774,7 +776,7 @@ export default function AbrirPortaPublico() {
                       type="button"
                       disabled={kioskSenhaProcessando}
                       onClick={keypadClear}
-                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
+                      className={`h-14 rounded-2xl bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-extrabold border border-slate-200 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-sky-200 select-none disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center leading-none ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
                     >
                       Limpar
                     </button>
@@ -785,7 +787,7 @@ export default function AbrirPortaPublico() {
                       type="button"
                       onClick={validarSenha}
                       disabled={senha.length < 4 || kioskSenhaProcessando}
-                      className="mt-6 w-full h-11 rounded-2xl bg-gradient-to-r from-sky-600 to-blue-700 text-white text-sm font-extrabold hover:from-sky-700 hover:to-blue-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-sky-200 flex items-center justify-center gap-2"
+                      className="mt-4 w-full h-11 rounded-2xl bg-gradient-to-r from-sky-600 to-blue-700 text-white text-sm font-extrabold hover:from-sky-700 hover:to-blue-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-sky-200 flex items-center justify-center gap-2"
                     >
                       {kioskSenhaProcessando ? <Loader2 className="w-5 h-5 animate-spin" /> : <Unlock className="w-5 h-5" />}
                       {status === 'validando' ? 'Validando...' : status === 'abrindo' ? 'Abrindo...' : 'Abrir Porta'}
@@ -798,10 +800,6 @@ export default function AbrirPortaPublico() {
 
         </div>
 
-        {/* Footer */}
-        <div className="text-center mt-6 text-white/50 text-sm">
-          <p>Sistema de Gaveteiros Inteligentes</p>
-        </div>
       </div>
 
       {mensagem && status === 'erro' && (

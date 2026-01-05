@@ -23,6 +23,7 @@ export default function DetalhesPorta() {
   const [porta, setPorta] = useState<PortaDetalhada | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingAcao, setLoadingAcao] = useState(false)
+  const [agora, setAgora] = useState<Date>(() => new Date())
   const [senhaLiberacao, setSenhaLiberacao] = useState('')
   const [destinatarios, setDestinatarios] = useState<Destinatario[]>([{ bloco: '', apartamento: '' }])
   const [showOcuparForm, setShowOcuparForm] = useState(false)
@@ -57,6 +58,33 @@ export default function DetalhesPorta() {
     const t = setTimeout(() => setAviso(null), 3500)
     return () => clearTimeout(t)
   }, [aviso])
+
+  useEffect(() => {
+    if (!porta?.ocupado_em) return
+    if (porta.status_atual !== 'OCUPADO') return
+    const t = setInterval(() => setAgora(new Date()), 30_000)
+    return () => clearInterval(t)
+  }, [porta?.ocupado_em, porta?.status_atual])
+
+  const formatarTempoOcupacao = (ocupadoEm: string | null | undefined) => {
+    if (!ocupadoEm) return '—'
+    const inicio = new Date(ocupadoEm)
+    if (Number.isNaN(inicio.getTime())) return '—'
+
+    const diffMs = agora.getTime() - inicio.getTime()
+    if (diffMs < 0) return '—'
+
+    const totalMin = Math.floor(diffMs / 60000)
+    const dias = Math.floor(totalMin / (60 * 24))
+    const horas = Math.floor((totalMin % (60 * 24)) / 60)
+    const mins = totalMin % 60
+
+    const partes: string[] = []
+    if (dias > 0) partes.push(`${dias}d`)
+    if (horas > 0 || dias > 0) partes.push(`${horas}h`)
+    partes.push(`${mins}m`)
+    return partes.join(' ')
+  }
 
   // Função para gerar SHA256 (compatível com browser)
   const generateSHA256 = async (message: string): Promise<string> => {
@@ -533,21 +561,23 @@ export default function DetalhesPorta() {
               
             <div className="p-6 space-y-6">
               {/* Informações Detalhadas */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-white rounded-2xl border border-slate-200 p-5">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Número da Porta</div>
                   <div className="mt-1 text-2xl font-extrabold text-slate-900">{porta.numero_porta}</div>
                 </div>
 
                 <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Gaveteiro</div>
-                  <div className="mt-1 text-base font-bold text-slate-900 truncate">{porta.gaveteiro_nome || 'N/A'}</div>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-5">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Data de Ocupação</div>
                   <div className="mt-1 text-base font-bold text-slate-900">
                     {porta.ocupado_em ? new Date(porta.ocupado_em).toLocaleString('pt-BR') : 'Não ocupada'}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Tempo de ocupação</div>
+                  <div className="mt-1 text-base font-bold text-slate-900">
+                    {porta.status_atual === 'OCUPADO' ? formatarTempoOcupacao(porta.ocupado_em) : '—'}
                   </div>
                 </div>
 
