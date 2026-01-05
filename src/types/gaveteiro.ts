@@ -9,6 +9,7 @@ export type TipoMorador = 'PROPRIETARIO' | 'INQUILINO'
 export interface ContatoAdicional {
   nome: string
   whatsapp: string
+  email?: string
 }
 
 export interface Condominio {
@@ -116,6 +117,7 @@ export interface Morador {
   uid: string
   condominio_uid: string
   nome: string
+  email?: string
   whatsapp?: string
   bloco?: string
   apartamento: string
@@ -123,6 +125,7 @@ export interface Morador {
   contatos_adicionais: ContatoAdicional[]
   observacao?: string
   ativo: boolean
+  deletado?: boolean
   created_at: string
   updated_at: string
 }

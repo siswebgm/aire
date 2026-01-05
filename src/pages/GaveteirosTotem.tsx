@@ -24,7 +24,8 @@ import {
   Maximize2,
   Minimize2,
   ShoppingCart,
-  ArrowRight
+  ArrowRight,
+  ArrowLeft
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -169,8 +170,6 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   const [autoFinalizarEm, setAutoFinalizarEm] = useState<number | null>(null)
   const [portaPage, setPortaPage] = useState(1)
   const [portaPageSize, setPortaPageSize] = useState(60)
-  const [aptoPage, setAptoPage] = useState(1)
-  const [aptoPageSize, setAptoPageSize] = useState(6 * 7)
   
   // Dados
   const [gaveteiros, setGaveteiros] = useState<Gaveteiro[]>([])
@@ -578,24 +577,6 @@ useEffect(() => {
     }
   }, [])
 
-  useEffect(() => {
-    const getCols = () => {
-      const w = window.innerWidth
-      if (w >= 1024) return 12
-      if (w >= 768) return 10
-      if (w >= 640) return 8
-      return 6
-    }
-
-    const update = () => {
-      setAptoPageSize(getCols() * 7)
-    }
-
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-
   const toggleFullscreen = async () => {
     try {
       if (document.fullscreenElement) {
@@ -610,15 +591,19 @@ useEffect(() => {
     }
   }
   
-  // Função para recarregar apenas as portas
+  // Função para recarregar apenas as portas (otimizada)
   const recarregarPortas = async () => {
     if (!gaveteiros.length) return
     
-    const todasPortas: Porta[] = []
-    for (const gvt of gaveteiros) {
-      const portasGvt = await listarPortas(gvt.uid)
-      todasPortas.push(...portasGvt.map(p => ({ ...p, gaveteiro: gvt })))
-    }
+    // Carregar portas de todos os gaveteiros em paralelo
+    const portasPromises = gaveteiros.map(gvt => 
+      listarPortas(gvt.uid).then(portas => 
+        portas.map(p => ({ ...p, gaveteiro: gvt }))
+      )
+    )
+    
+    const todasPortasArrays = await Promise.all(portasPromises)
+    const todasPortas = todasPortasArrays.flat()
     setPortas(todasPortas)
   }
 
@@ -627,6 +612,7 @@ useEffect(() => {
     
     setLoading(true)
     try {
+      // Carregar tudo em paralelo para melhor performance
       const [gaveteirosData, blocosData, apartamentosData] = await Promise.all([
         listarGaveteiros(condominio.uid),
         listarBlocos(condominio.uid),
@@ -637,12 +623,15 @@ useEffect(() => {
       setBlocos(blocosData)
       setApartamentos(apartamentosData)
       
-      // Carregar portas de todos os gaveteiros
-      const todasPortas: Porta[] = []
-      for (const gvt of gaveteirosData) {
-        const portasGvt = await listarPortas(gvt.uid)
-        todasPortas.push(...portasGvt.map(p => ({ ...p, gaveteiro: gvt })))
-      }
+      // Carregar portas de todos os gaveteiros em paralelo (otimização crítica)
+      const portasPromises = gaveteirosData.map(gvt => 
+        listarPortas(gvt.uid).then(portas => 
+          portas.map(p => ({ ...p, gaveteiro: gvt }))
+        )
+      )
+      
+      const todasPortasArrays = await Promise.all(portasPromises)
+      const todasPortas = todasPortasArrays.flat()
       setPortas(todasPortas)
       
     } catch (error) {
@@ -733,25 +722,43 @@ useEffect(() => {
     .filter(a => a.bloco_uid === blocos.find(b => b.nome === blocoSelecionado)?.uid)
     .filter(a => a.numero.toLowerCase().includes(buscaApto.toLowerCase()))
 
-  const apartamentosTotalPages = Math.max(1, Math.ceil(apartamentosFiltrados.length / aptoPageSize))
-  const apartamentosPaginados = apartamentosFiltrados.slice(
-    (aptoPage - 1) * aptoPageSize,
-    aptoPage * aptoPageSize
-  )
+  const apartamentosAgrupadosPorAndar = (() => {
+    const getAndar = (numero: string) => {
+      const parsed = Number.parseInt(String(numero).replace(/\D/g, ''), 10)
+      if (Number.isNaN(parsed)) return 0
+      if (parsed < 100) return 0
+      return Math.floor(parsed / 100)
+    }
 
-  useEffect(() => {
-    setAptoPage(1)
-  }, [blocoSelecionado, buscaApto, aptoPageSize])
+    const sorted = [...apartamentosFiltrados].sort((a, b) => {
+      const andarA = getAndar(a.numero)
+      const andarB = getAndar(b.numero)
+      if (andarA !== andarB) return andarA - andarB
 
-  useEffect(() => {
-    setAptoPage(p => Math.min(p, apartamentosTotalPages))
-  }, [apartamentosTotalPages])
+      const numA = Number.parseInt(String(a.numero).replace(/\D/g, ''), 10)
+      const numB = Number.parseInt(String(b.numero).replace(/\D/g, ''), 10)
+      if (!Number.isNaN(numA) && !Number.isNaN(numB) && numA !== numB) return numA - numB
+
+      return String(a.numero).localeCompare(String(b.numero), 'pt-BR', { numeric: true })
+    })
+
+    const groups = new Map<number, typeof sorted>()
+    for (const apto of sorted) {
+      const andar = getAndar(apto.numero)
+      const prev = groups.get(andar) || []
+      prev.push(apto)
+      groups.set(andar, prev)
+    }
+
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([andar, items]) => ({ andar, items }))
+  })()
 
   const selecionarBloco = (nome: string) => {
     setBlocoSelecionado(nome)
     setDestinoAtivo({ bloco: nome, apartamento: '' })
     setBuscaApto('')
-    setAptoPage(1)
     setEtapa('selecionar_apartamento')
   }
 
@@ -795,7 +802,6 @@ useEffect(() => {
   const voltarParaBlocos = () => {
     setBlocoSelecionado('')
     setBuscaBloco('')
-    setAptoPage(1)
     setEtapa('selecionar_bloco')
   }
 
@@ -1124,7 +1130,6 @@ useEffect(() => {
     setMensagemErro('')
     setBuscaBloco('')
     setBuscaApto('')
-    setAptoPage(1)
     setEtapa(isKiosk ? 'inicio' : 'selecionar_bloco')
     carregarDados()
   }
@@ -1151,6 +1156,7 @@ useEffect(() => {
   return (
     <div
       ref={fullscreenTargetRef}
+      data-etapa={etapa}
       className={`${embeddedBleedClass} h-screen ${isKiosk ? (etapa === 'inicio' ? 'p-0' : 'p-4') : 'p-4'} flex flex-col overflow-x-hidden ${
         isFullscreen || isKiosk ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900' : 'bg-slate-50'
       }`}
@@ -1397,7 +1403,47 @@ useEffect(() => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 bg-white border border-slate-200 rounded-2xl p-3 sm:px-4 sm:py-3 shadow-sm">
             <div className="flex items-center gap-3 min-w-0">
               <div className="bg-sky-50 rounded-xl p-2 flex-shrink-0">
-                <Package className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
+                {etapa === 'selecionar_bloco' ? (
+                  <button
+                    type="button"
+                    onClick={reiniciar}
+                    className="inline-flex items-center justify-center"
+                    title="Voltar"
+                    aria-label="Voltar"
+                  >
+                    <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
+                  </button>
+                ) : etapa === 'selecionar_apartamento' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEtapa('selecionar_bloco')
+                      setBlocoSelecionado('')
+                      setDestinoAtivo(null)
+                      setBuscaApto('')
+                    }}
+                    className="inline-flex items-center justify-center"
+                    title="Voltar"
+                    aria-label="Voltar"
+                  >
+                    <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
+                  </button>
+                ) : etapa === 'selecionar_porta' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPortaSelecionada(null)
+                      setEtapa('selecionar_apartamento')
+                    }}
+                    className="inline-flex items-center justify-center"
+                    title="Voltar"
+                    aria-label="Voltar"
+                  >
+                    <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
+                  </button>
+                ) : (
+                  <Package className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
+                )}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 truncate">{headerSubtitle}</div>
@@ -1447,7 +1493,6 @@ useEffect(() => {
                   if (!blocoSelecionado && destinatarios.length > 0) {
                     setBlocoSelecionado(destinatarios[0].bloco)
                     setBuscaApto('')
-                    setAptoPage(1)
                   }
                   setEtapa('selecionar_apartamento')
                 }}
@@ -1605,7 +1650,6 @@ useEffect(() => {
                         setBlocoSelecionado(bloco)
                         setDestinoAtivo({ bloco, apartamento: '' })
                         setBuscaApto('')
-                        setAptoPage(1)
                         setEtapa('selecionar_apartamento')
                       }}
                     >
@@ -1851,89 +1895,80 @@ useEffect(() => {
             
             {/* Grid de apartamentos com scroll */}
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-12 gap-1.5 pb-2 content-start">
-                {apartamentosPaginados.map((apto) => {
-                  const jaAdicionado = destinatarios.some(
-                    d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
-                  )
-                  const qtdSelecionada = destinatarios.find(
-                    d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
-                  )?.quantidade
-                  const aptoAtivo = destinoAtivo?.bloco === blocoSelecionado && destinoAtivo?.apartamento === apto.numero
-                  return (
-                    <button
-                      key={apto.uid}
-                      onClick={() => {
-                        const existe = destinatarios.some(d => d.bloco === blocoSelecionado && d.apartamento === apto.numero)
-                        if (!existe) {
-                          setDestinoAtivo({ bloco: blocoSelecionado, apartamento: apto.numero })
-                        } else if (aptoAtivo) {
-                          setDestinoAtivo({ bloco: blocoSelecionado, apartamento: '' })
-                        }
-                        adicionarDestinatario(apto.numero)
-                      }}
-                      className={`relative h-[64px] p-1.5 rounded-md border-2 transition-all text-center active:scale-[0.99] ${
-                        aptoAtivo
-                          ? 'bg-sky-50 border-sky-600 text-sky-900 ring-2 ring-sky-300'
-                          : jaAdicionado
-                            ? 'bg-sky-50 border-sky-300 text-sky-800'
-                            : 'bg-white border-slate-200 hover:border-sky-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {jaAdicionado && (
-                        <span className="pointer-events-none absolute right-1 top-1 inline-flex items-center justify-center rounded-full bg-white/85 border border-emerald-200 w-4 h-4">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        </span>
-                      )}
-                      <div
-                        className={`h-full flex flex-col items-center leading-none ${
-                          jaAdicionado ? 'pt-1 pb-8 justify-start' : 'justify-center'
-                        }`}
-                      >
-                        <span className={`text-[9px] font-semibold ${jaAdicionado ? 'text-sky-600' : 'text-slate-400'}`}>
-                          Apt
-                        </span>
-                        <span className={`mt-1 text-[16px] font-extrabold tracking-tight ${jaAdicionado ? 'text-sky-800' : 'text-slate-800'}`}>
-                          {apto.numero}
-                        </span>
+              <div className="flex flex-col gap-3 pb-2">
+                {apartamentosAgrupadosPorAndar.map(({ andar, items }) => (
+                  <div key={andar} id={`andar-${andar}`} className="pb-2 border-b border-slate-100 last:border-b-0">
+                    <div className="mb-2 flex items-center justify-between px-1">
+                      <div className="text-xs font-extrabold tracking-wide text-slate-600">
+                        {andar === 0 ? 'Térreo' : `${andar}º andar`}
                       </div>
-                    </button>
-                  )
-                })}
+                      <div className="text-[11px] font-extrabold tabular-nums text-slate-400">
+                        {items.length}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(56px,1fr))] sm:grid-cols-[repeat(auto-fit,minmax(60px,1fr))] lg:grid-cols-[repeat(auto-fit,minmax(64px,1fr))] gap-1 content-start">
+                      {items.map((apto) => {
+                        const jaAdicionado = destinatarios.some(
+                          d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
+                        )
+                        const qtdSelecionada = destinatarios.find(
+                          d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
+                        )?.quantidade
+                        const aptoAtivo = destinoAtivo?.bloco === blocoSelecionado && destinoAtivo?.apartamento === apto.numero
+                        return (
+                          <button
+                            key={apto.uid}
+                            onClick={() => {
+                              const existe = destinatarios.some(d => d.bloco === blocoSelecionado && d.apartamento === apto.numero)
+                              if (!existe) {
+                                setDestinoAtivo({ bloco: blocoSelecionado, apartamento: apto.numero })
+                              } else if (aptoAtivo) {
+                                setDestinoAtivo({ bloco: blocoSelecionado, apartamento: '' })
+                              }
+                              adicionarDestinatario(apto.numero)
+                            }}
+                            className={`min-w-0 w-full relative h-[56px] p-1 rounded-md border-2 transition-all text-center active:scale-[0.99] ${
+                              aptoAtivo
+                                ? 'bg-sky-50 border-sky-600 text-sky-900 ring-2 ring-sky-300 shadow-sm'
+                                : jaAdicionado
+                                  ? 'bg-sky-50 border-sky-300 text-sky-800 shadow-sm'
+                                  : 'bg-white border-slate-200 hover:border-sky-200 hover:bg-slate-50 hover:shadow-sm'
+                            }`}
+                          >
+                            {jaAdicionado && (
+                              <span className="pointer-events-none absolute right-1 top-1 inline-flex items-center justify-center rounded-full bg-white/85 border border-emerald-200 w-4 h-4">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              </span>
+                            )}
+                            <div
+                              className={`h-full flex flex-col items-center leading-none ${
+                                jaAdicionado ? 'pt-1 pb-7 justify-start' : 'justify-center'
+                              }`}
+                            >
+                              <span className={`text-[8px] font-semibold ${jaAdicionado ? 'text-sky-600' : 'text-slate-400'}`}>
+                                Apt
+                              </span>
+                              <span className={`mt-1 text-[15px] font-extrabold tracking-tight ${jaAdicionado ? 'text-sky-800' : 'text-slate-800'}`}>
+                                {apto.numero}
+                              </span>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
 
                 {apartamentosFiltrados.length === 0 && (
-                  <p className="col-span-full text-center text-gray-500 py-8">Nenhum apartamento cadastrado</p>
+                  <p className="text-center text-gray-500 py-8">Nenhum apartamento cadastrado</p>
                 )}
               </div>
             </div>
             
             {/* Rodapé com ações */}
             <div className="mt-auto pt-4 border-t border-gray-200 flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAptoPage(p => Math.max(1, p - 1))}
-                    disabled={aptoPage <= 1}
-                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Página anterior"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <div className="text-sm font-semibold text-slate-600 tabular-nums">
-                    Página {Math.min(aptoPage, apartamentosTotalPages)} de {apartamentosTotalPages}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAptoPage(p => Math.min(apartamentosTotalPages, p + 1))}
-                    disabled={aptoPage >= apartamentosTotalPages}
-                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Próxima página"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                </div>
-                <div className="flex gap-2">
+              <div className="flex items-center justify-end">
+                <div className="flex gap-2 justify-end">
                   <button
                     onClick={voltarParaBlocos}
                     className="px-4 py-2 text-sky-600 font-medium text-sm hover:bg-sky-50 rounded-lg transition-all"

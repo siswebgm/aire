@@ -745,6 +745,7 @@ export async function listarMoradores(condominioUid: string): Promise<Morador[]>
     .select('*')
     .eq('condominio_uid', condominioUid)
     .eq('ativo', true)
+    .or('deletado.is.null,deletado.eq.false')
     .order('bloco', { ascending: true, nullsFirst: false })
     .order('apartamento', { ascending: true })
 

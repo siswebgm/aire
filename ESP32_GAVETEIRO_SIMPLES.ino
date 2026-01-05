@@ -1,8 +1,5 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include <Preferences.h>
-#include "mbedtls/sha256.h"
-#include <esp_task_wdt.h>
 
 /* =====================================================
    ESP32 SIMPLES - SEM MCP23017
@@ -22,36 +19,42 @@
 const char* WIFI_SSID = "NEW LINK - CAMILLA 2G";
 const char* WIFI_PASSWORD = "NG147068";
 
+const char* FW_VERSION = "AIRE-ESP32-SIMPLES-2026-01-04";
+
+IPAddress STATIC_IP(192, 168, 1, 75);
+IPAddress STATIC_GATEWAY(192, 168, 1, 254);
+IPAddress STATIC_SUBNET(255, 255, 255, 0);
+IPAddress STATIC_DNS1(192, 168, 1, 254);
+IPAddress STATIC_DNS2(8, 8, 8, 8);
+
 /* =====================================================
    CONFIGURAÇÕES DAS PORTAS (DIRETO NO ESP32)
    ===================================================== */
 
-#define NUM_PORTAS 8
-#define TEMPO_PULSO 400
+#define NUM_PORTAS 4
+#define TEMPO_PULSO 500
 
 // Portas GPIO para os relés (conforme seu hardware atual)
-const uint8_t PORTAS_RELE[NUM_PORTAS] = {26, 27, 21, 22, 0, 0, 0, 0};  // ✅ Seus GPIOs originais
+const uint8_t PORTAS_RELE[NUM_PORTAS] = {26, 27, 21, 22};
 
 // Portas GPIO para os sensores (conforme seu hardware atual)
-const uint8_t PORTAS_SENSOR[NUM_PORTAS] = {18, 19, 23, 4, 5, 12, 13, 14}; // ✅ Sensores disponíveis (evita GPIOs de relé)
+const uint8_t PORTAS_SENSOR[NUM_PORTAS] = {18, 19, 23, 4};
 
 // Relé ativo em HIGH (fechadura ABRE em HIGH, FECHA em LOW)
-const bool RELE_ATIVO_EM_HIGH = true;    // ✅ Mudei para true
-const uint8_t RELE_LIGADO    = HIGH;     // HIGH = ABRE ✅
-const uint8_t RELE_DESLIGADO = LOW;      // LOW = FECHA ✅
+const bool RELE_ATIVO_EM_HIGH = false;
+const uint8_t RELE_LIGADO    = LOW;
+const uint8_t RELE_DESLIGADO = HIGH;
 
 /* =====================================================
    OBJETOS
    ===================================================== */
 
 WebServer server(80);
-Preferences prefs;
 
 /* =====================================================
    VARIÁVEIS
    ===================================================== */
 
-bool portaAberta[NUM_PORTAS] = {false};
 bool pulsoAtivo[NUM_PORTAS]  = {false};
 unsigned long tempoInicioPulso[NUM_PORTAS] = {0};
 
@@ -119,6 +122,14 @@ bool conectarWiFi() {
   
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostname.c_str());
+
+  if (!WiFi.config(STATIC_IP, STATIC_GATEWAY, STATIC_SUBNET, STATIC_DNS1, STATIC_DNS2)) {
+    Serial.println("[AIRE] ❌ Falha ao configurar IP estático");
+  } else {
+    Serial.print("[AIRE] IP estático configurado: ");
+    Serial.println(STATIC_IP);
+  }
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long inicio = millis();
@@ -339,6 +350,7 @@ void handleDiscovery() {
   String json = "{"
     "\"device\":\"" + deviceName + "\","
     "\"id\":\"" + deviceId + "\","
+    "\"fw_version\":\"" + String(FW_VERSION) + "\","
     "\"ip\":\"" + currentIP + "\","
     "\"hostname\":\"" + hostname + "\","
     "\"conexao\":\"wifi\","
@@ -363,6 +375,7 @@ void handleStatus() {
     "\"hostname\":\"" + hostname + "\","
     "\"device\":\"" + deviceName + "\","
     "\"id\":\"" + deviceId + "\","
+    "\"fw_version\":\"" + String(FW_VERSION) + "\","
     "\"ssid\":\"" + WiFi.SSID() + "\","
     "\"rssi\":" + String(WiFi.RSSI()) + ","
     "\"uptime\":" + String(millis() / 1000) + ","
@@ -382,6 +395,36 @@ void handleStatus() {
   
   json += "],"
     "\"timestamp\":" + String(millis()) +
+    "}";
+  
+  server.send(200, "application/json", json);
+}
+
+void handleSensor() {
+  if (!server.hasArg("porta")) {
+    server.send(400, "application/json", "{\"erro\":\"porta_obrigatoria\"}");
+    return;
+  }
+
+  int porta = server.arg("porta").toInt();
+  
+  if (porta < 1 || porta > NUM_PORTAS) {
+    server.send(400, "application/json", "{\"erro\":\"porta_invalida\"}");
+    return;
+  }
+
+  int i = porta - 1;
+  int gpio = PORTAS_SENSOR[i];
+  int raw = digitalRead(gpio);
+  bool fechado = (raw == LOW);
+
+  String json = "{" 
+    "\"porta\":" + String(porta) + "," 
+    "\"gpio_sensor\":" + String(gpio) + "," 
+    "\"raw\":" + String(raw) + "," 
+    "\"sensor\":\"" + String(fechado ? "fechado" : "aberto") + "\"," 
+    "\"timestamp\":" + String(millis()) + "," 
+    "\"fw_version\":\"" + String(FW_VERSION) + "\"" 
     "}";
 
   server.send(200, "application/json", json);
@@ -509,6 +552,8 @@ void setup() {
   // Configura portas dos relés (apenas as portas em uso)
   for(int i = 0; i < NUM_PORTAS; i++){
     if (PORTAS_RELE[i] > 0) {  // ✅ Só configura se GPIO for válido
+      // ⚠️ Evita glitch no boot: define nível primeiro, depois habilita OUTPUT
+      digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
       pinMode(PORTAS_RELE[i], OUTPUT);
       
       // ⚠️ FORÇA ESTADO FECHADO IMEDIATAMENTE (LOW = FECHADO)
@@ -601,6 +646,7 @@ void setup() {
   // Configura servidor web
   server.on("/discovery", handleDiscovery);
   server.on("/status", handleStatus);
+  server.on("/sensor", handleSensor);
   server.on("/abrir", handleAbrir);
   server.on("/fechar", handleFechar);
   server.on("/identify", handleIdentify);
@@ -645,13 +691,13 @@ void loop() {
   // LED indica status (ESP32 não tem LED_BUILTIN padrão)
   const int LED_PIN = 2;
   const int LED_PIN_EXTERNO = 33;
-  
-  bool ledState = millis() % 2000 < 1000; // Piscando lento
+
   if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(LED_PIN, ledState);           // LED builtin
-    digitalWrite(LED_PIN_EXTERNO, ledState);  // LED externo
+    bool ledState = millis() % 2000 < 1000; // Piscando lento quando conectado
+    digitalWrite(LED_PIN, ledState);
+    digitalWrite(LED_PIN_EXTERNO, ledState);
   } else {
-    digitalWrite(LED_PIN, millis() % 500 < 250);        // Piscando rápido
+    digitalWrite(LED_PIN, millis() % 500 < 250);         // Piscando rápido
     digitalWrite(LED_PIN_EXTERNO, millis() % 500 < 250); // Piscando rápido
   }
   

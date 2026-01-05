@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
-import { ArrowLeft, Wifi, RefreshCw, TestTube, Info, Server, Activity, CheckCircle, AlertCircle, Lock, Send } from 'lucide-react'
+import { Wifi, RefreshCw, TestTube, Info, Server, Activity, CheckCircle, AlertCircle, Lock, Send, Search } from 'lucide-react'
+import { MainLayout } from '../components/MainLayout'
+import { PageHeader } from '../components/PageHeader'
 
 export default function ConfigurarESP32() {
   const [ssid, setSsid] = useState('')
@@ -30,10 +32,35 @@ export default function ConfigurarESP32() {
   const [portasDisponiveis, setPortasDisponiveis] = useState<any[]>([])
   const [carregandoPortas, setCarregandoPortas] = useState(false)
   const [portaAbertura, setPortaAbertura] = useState<string | null>(null)
+  const [buscaPorta, setBuscaPorta] = useState('')
   const [condominioInfo, setCondominioInfo] = useState<any>(null)
   const [usuarioInfo, setUsuarioInfo] = useState<any>(null)
 
   const router = useRouter()
+
+  const portasFiltradas = React.useMemo(() => {
+    const termo = buscaPorta.trim().toLowerCase()
+    if (!termo) return portasDisponiveis
+
+    const termoDigits = termo.replace(/\D/g, '')
+    const termoDigitsSemZero = termoDigits.replace(/^0+/, '')
+
+    return portasDisponiveis.filter((porta: any) => {
+      const portaStr = String(porta?.porta ?? '').toLowerCase()
+      const portaDigits = portaStr.replace(/\D/g, '')
+      const portaDigitsSemZero = portaDigits.replace(/^0+/, '')
+      const gaveteiroStr = String(porta?.gaveteiro ?? '').toLowerCase()
+      const statusStr = String(porta?.status ?? '').toLowerCase()
+      const uidStr = String(porta?.portaUid ?? '').toLowerCase()
+
+      const matchPorNumero = termoDigits
+        ? portaDigits.includes(termoDigits) || (termoDigitsSemZero && portaDigitsSemZero.includes(termoDigitsSemZero))
+        : false
+
+      return portaStr.includes(termo) || gaveteiroStr.includes(termo) || statusStr.includes(termo) || uidStr.includes(termo)
+        || matchPorNumero
+    })
+  }, [portasDisponiveis, buscaPorta])
 
   // Detectar rede WiFi atual ao carregar a página
   React.useEffect(() => {
@@ -1078,42 +1105,20 @@ export default function ConfigurarESP32() {
   }
 
   return (
-    <>
-      <Head>
-        <title>Configurar ESP32 - AIRE</title>
-        <meta name="description" content="Configurar WiFi do ESP32" />
-      </Head>
+    <MainLayout>
+      <>
+        <Head>
+          <title>Configurar ESP32 - AIRE</title>
+          <meta name="description" content="Configurar WiFi do ESP32" />
+        </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-4xl mx-auto">
-          {/* Header moderno */}
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-6">
-            <div className="flex items-center justify-between">
-              <button
-                onClick={() => router.back()}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-sky-50 text-blue-600 hover:from-blue-100 hover:to-sky-100 rounded-xl transition-all font-medium border border-blue-200"
-              >
-                <ArrowLeft size={20} />
-                <span>Voltar</span>
-              </button>
-              
-              <div className="text-center flex-1">
-                <div className="flex items-center justify-center gap-3 mb-2">
-                  <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-sky-600 rounded-xl flex items-center justify-center text-white">
-                    <Wifi size={24} />
-                  </div>
-                  <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-sky-600 bg-clip-text text-transparent">
-                    Configurar ESP32
-                  </h1>
-                </div>
-                <p className="text-gray-600">
-                  Configure o WiFi do seu dispositivo ESP32
-                </p>
-              </div>
-              
-              <div className="w-20"></div> {/* Spacer para centralizar */}
-            </div>
-          </div>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 pt-2 pb-4 px-4 sm:px-6 lg:px-8">
+        <div className="w-full">
+          <PageHeader
+            title="Configurar ESP32"
+            subtitle="Configure o WiFi do seu dispositivo ESP32"
+            sticky={false}
+          />
 
           {/* Abas modernas */}
           <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-2 mb-6">
@@ -1654,31 +1659,34 @@ export default function ConfigurarESP32() {
                 <div className="border border-gray-200 rounded-lg">
                   <div className="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
                     <h3 className="text-lg font-medium text-gray-900">
-                      Portas Disponíveis ({portasDisponiveis.length})
+                      Portas Disponíveis ({portasFiltradas.length})
                     </h3>
-                    <button
-                      onClick={() => {
-                        setPortasDisponiveis([])
-                        setResult(null)
-                      }}
-                      className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
-                    >
-                      Limpar
-                    </button>
+                    <div className="relative w-full max-w-xs">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        value={buscaPorta}
+                        onChange={(e) => setBuscaPorta(e.target.value)}
+                        placeholder="Buscar porta"
+                        className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-gray-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
-                      {portasDisponiveis.map((porta: any, index: number) => (
-                        <div
-                          key={index}
-                          className={`border rounded-lg p-4 ${
-                            porta.sucesso === true
-                              ? 'bg-green-50 border-green-200'
-                              : porta.sucesso === false
-                              ? 'bg-red-50 border-red-200'
-                              : 'bg-gray-50 border-gray-200'
-                          }`}
-                        >
+                    {portasFiltradas.length === 0 ? (
+                      <div className="p-6 text-center text-sm text-gray-500">Nenhuma porta encontrada</div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
+                        {portasFiltradas.map((porta: any, index: number) => (
+                          <div
+                            key={index}
+                            className={`border rounded-lg p-4 ${
+                              porta.sucesso === true
+                                ? 'bg-green-50 border-green-200'
+                                : porta.sucesso === false
+                                ? 'bg-red-50 border-red-200'
+                                : 'bg-gray-50 border-gray-200'
+                            }`}
+                          >
                           <div className="text-center mb-3">
                             <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2 ${
                               porta.sucesso === true
@@ -1743,8 +1751,9 @@ export default function ConfigurarESP32() {
                             </div>
                           )}
                         </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -1818,6 +1827,7 @@ export default function ConfigurarESP32() {
           </div>
         </div>
       </div>
-    </>
+      </>
+    </MainLayout>
   )
 }

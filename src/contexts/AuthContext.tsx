@@ -7,6 +7,7 @@ interface AuthContextType {
   condominio: Condominio | null
   loading: boolean
   login: (email: string, senha: string) => Promise<{ success: boolean; error?: string }>
+  atualizarUsuario: (usuarioAtualizado: Usuario) => void
   logout: () => void
 }
 
@@ -35,10 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .single()
         
         if (!userError && usuarioAtualizado) {
-          setUsuario(usuarioAtualizado)
-          localStorage.setItem('gvt_usuario', JSON.stringify(usuarioAtualizado))
+          const userWithoutPassword = { ...usuarioAtualizado, senha_hash: undefined }
+          setUsuario(userWithoutPassword)
+          localStorage.setItem('gvt_usuario', JSON.stringify(userWithoutPassword))
         } else {
-          setUsuario(user)
+          const userWithoutPassword = { ...user, senha_hash: undefined }
+          setUsuario(userWithoutPassword)
+          localStorage.setItem('gvt_usuario', JSON.stringify(userWithoutPassword))
         }
         
         // Buscar dados atualizados do condomínio no banco
@@ -122,6 +126,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const atualizarUsuario = (usuarioAtualizado: Usuario) => {
+    const userWithoutPassword = { ...usuarioAtualizado, senha_hash: undefined }
+    setUsuario(userWithoutPassword)
+    try {
+      localStorage.setItem('gvt_usuario', JSON.stringify(userWithoutPassword))
+    } catch {
+      // ignore
+    }
+  }
+
   const logout = () => {
     setUsuario(null)
     setCondominio(null)
@@ -130,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ usuario, condominio, loading, login, logout }}>
+    <AuthContext.Provider value={{ usuario, condominio, loading, login, atualizarUsuario, logout }}>
       {children}
     </AuthContext.Provider>
   )

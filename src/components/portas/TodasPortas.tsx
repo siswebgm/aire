@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
-import { DoorOpen, Lock, Unlock, Key, Trash2, Users, AlertTriangle, X, RefreshCw, Maximize2, Minimize2, Activity } from 'lucide-react'
+import { Lock, Unlock, Key, Trash2, Users, AlertTriangle, X, RefreshCw, Maximize2, Minimize2, Activity, Search } from 'lucide-react'
 import type { Porta } from '../../types/gaveteiro'
 import { listarTodasPortas, ocuparPorta, liberarPortaComSenha, cancelarOcupacao, type Destinatario } from '../../services/gaveteiroService'
 import { useAuth } from '../../contexts/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
+import { PageHeader } from '../../../components/PageHeader'
 
 // 🎨 Formata tempo em minutos para exibição legível - SEPARADO
 function formatarTempo(minutos: number): string {
@@ -42,6 +43,20 @@ export default function TodasPortas() {
   const [filtro, setFiltro] = useState<'todas' | 'disponiveis' | 'ocupadas'>('todas')
   const [isFullScreen, setIsFullScreen] = useState(false)
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<Date>(new Date())
+  const [consultaBloco, setConsultaBloco] = useState('')
+  const [consultaApartamento, setConsultaApartamento] = useState('')
+  const [consultaAberta, setConsultaAberta] = useState(false)
+
+  useEffect(() => {
+    if (!consultaAberta) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConsultaAberta(false)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [consultaAberta])
 
   useEffect(() => {
     carregarPortas()
@@ -254,6 +269,51 @@ export default function TodasPortas() {
     return true
   })
 
+  const portasOcupadas = portas.filter((p) => p.status_atual === 'OCUPADO')
+
+  const paresDestinoDePorta = (porta: PortaDetalhada) => {
+    const blocos = (porta.bloco_atual || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const apts = (porta.apartamento_atual || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    if (blocos.length === 0 && apts.length === 0) return [] as Array<{ bloco: string; apartamento: string }>
+    if (blocos.length === apts.length && blocos.length > 0) {
+      return blocos.map((b, idx) => ({ bloco: b, apartamento: apts[idx] || '' }))
+    }
+    return [{ bloco: porta.bloco_atual || '', apartamento: porta.apartamento_atual || '' }]
+  }
+
+  const blocosDisponiveisConsulta = Array.from(
+    new Set(
+      portasOcupadas
+        .flatMap((p) => paresDestinoDePorta(p).map((d) => d.bloco))
+        .map((b) => b.trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
+  const apartamentosDisponiveisConsulta = Array.from(
+    new Set(
+      portasOcupadas
+        .flatMap((p) => paresDestinoDePorta(p))
+        .filter((d) => (consultaBloco ? d.bloco === consultaBloco : true))
+        .map((d) => d.apartamento)
+        .map((a) => a.trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
+  const portasOcupadasDoDestino = portasOcupadas.filter((p) => {
+    if (!consultaBloco || !consultaApartamento) return false
+    const pares = paresDestinoDePorta(p)
+    return pares.some((d) => d.bloco === consultaBloco && d.apartamento === consultaApartamento)
+  })
+
   if (!condominio) {
     return (
       <div className="text-center py-12">
@@ -265,67 +325,200 @@ export default function TodasPortas() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 shadow-md border border-gray-200">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
-              <DoorOpen size={20} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-sky-600 to-cyan-600 bg-clip-text text-transparent">Todas as Portas</h1>
-              <p className="text-sm text-sky-600">
-                {portas.length} portas totais • {portas.filter(p => p.status_atual === 'DISPONIVEL').length} disponíveis • {portas.filter(p => p.status_atual === 'OCUPADO').length} ocupadas
-              </p>
-            </div>
-          </div>
-          
-          {/* Filtros */}
-          <div className="flex gap-2 items-center">
+      <PageHeader
+        title="Todas as Portas"
+        showBack={false}
+        subtitle={
+          <span className="text-slate-500">
+            {portas.length} portas totais • {portas.filter((p) => p.status_atual === 'DISPONIVEL').length} disponíveis •{' '}
+            {portas.filter((p) => p.status_atual === 'OCUPADO').length} ocupadas
+          </span>
+        }
+        actions={
+          <div className="flex flex-wrap gap-2 items-center">
             <button
               onClick={() => setFiltro('todas')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                filtro === 'todas'
-                  ? 'bg-sky-600 text-white shadow-lg'
-                  : 'bg-white text-gray-700 hover:bg-gray-50'
+              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
+                filtro === 'todas' ? 'bg-sky-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
               }`}
             >
               Todas
             </button>
             <button
               onClick={() => setFiltro('disponiveis')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${
+              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
                 filtro === 'disponiveis'
-                  ? 'bg-green-500 text-white shadow-lg'
-                  : 'bg-white text-gray-700 hover:bg-gray-50'
+                  ? 'bg-green-500 text-white shadow-md'
+                  : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
               }`}
             >
               Disponíveis
             </button>
             <button
               onClick={() => setFiltro('ocupadas')}
-              className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                filtro === 'ocupadas'
-                  ? 'bg-red-500 text-white shadow-lg'
-                  : 'bg-white text-gray-700 hover:bg-gray-50'
+              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
+                filtro === 'ocupadas' ? 'bg-red-500 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
               }`}
             >
               Ocupadas
             </button>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setConsultaAberta((v) => !v)}
+                className={`p-2.5 rounded-xl transition-all border ${
+                  consultaAberta
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200'
+                }`}
+                title="Consulta rápida"
+                aria-label="Consulta rápida"
+              >
+                <Search size={18} />
+              </button>
+
+              {consultaAberta ? (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setConsultaAberta(false)} />
+                  <div className="absolute right-0 mt-2 z-50 w-[320px] sm:w-[360px]">
+                    <div className="absolute -top-2 right-5 h-4 w-4 rotate-45 bg-white/95 border border-slate-200/70 shadow" />
+                    <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200/70 overflow-hidden">
+                      <div className="px-4 py-3 border-b border-slate-200/70 bg-gradient-to-br from-white/80 to-slate-50/60">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-slate-900 to-slate-700 flex items-center justify-center text-white shadow-sm flex-shrink-0">
+                              <Search size={15} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-extrabold text-slate-900 truncate">Consulta rápida</p>
+                              <p className="text-xs text-slate-500 truncate">Bloco e apartamento</p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setConsultaAberta(false)}
+                            className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                            aria-label="Fechar"
+                            title="Fechar"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-4">
+                        <div className="w-full">
+                          <div className="flex w-full items-stretch gap-2">
+                            <select
+                              value={consultaBloco}
+                              onChange={(e) => {
+                                setConsultaBloco(e.target.value)
+                                setConsultaApartamento('')
+                              }}
+                              className="h-11 flex-1 min-w-0 px-3 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-sky-200/70"
+                            >
+                              <option value="">Bloco</option>
+                              {blocosDisponiveisConsulta.map((b) => (
+                                <option key={b} value={b}>
+                                  {b}
+                                </option>
+                              ))}
+                            </select>
+
+                            <select
+                              value={consultaApartamento}
+                              onChange={(e) => setConsultaApartamento(e.target.value)}
+                              disabled={!consultaBloco}
+                              className="h-11 flex-1 min-w-0 px-3 rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-sky-200/70 disabled:opacity-60"
+                            >
+                              <option value="">Apartamento</option>
+                              {apartamentosDisponiveisConsulta.map((a) => (
+                                <option key={a} value={a}>
+                                  {a}
+                                </option>
+                              ))}
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConsultaBloco('')
+                                setConsultaApartamento('')
+                              }}
+                              className="h-11 w-11 inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-gray-50"
+                              title="Limpar"
+                              aria-label="Limpar"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {consultaBloco && consultaApartamento ? (
+                          <div className="mt-4">
+                            {portasOcupadasDoDestino.length > 0 ? (
+                              <div className="flex flex-col gap-3 rounded-xl bg-red-50 border border-red-100 px-4 py-3">
+                                <div className="text-sm font-semibold text-red-800">
+                                  Encontrada(s) {portasOcupadasDoDestino.length} porta(s) ocupada(s)
+                                </div>
+                                <div className="grid gap-2">
+                                  {portasOcupadasDoDestino
+                                    .slice()
+                                    .sort((a, b) => (a.numero_porta || 0) - (b.numero_porta || 0))
+                                    .map((p) => (
+                                      <button
+                                        key={p.uid}
+                                        type="button"
+                                        onClick={() => {
+                                          setConsultaAberta(false)
+                                          abrirDetalhesPorta(p)
+                                        }}
+                                        className="w-full px-3 py-2 rounded-xl bg-white text-left border border-red-200 hover:bg-red-50"
+                                      >
+                                        <div className="flex items-center justify-between gap-3">
+                                          <span className="text-sm font-extrabold text-red-700">Porta {p.numero_porta}</span>
+                                          <span className="text-[11px] font-semibold text-slate-600">
+                                            {p.compartilhada ? 'Compartilhada' : 'Exclusiva'}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-[11px] text-slate-600">
+                                          Ocupado em: {formatarData(p.ocupado_em || null)}
+                                        </div>
+                                      </button>
+                                    ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-800">
+                                Nenhuma porta ocupada
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+
             <button
               onClick={toggleFullScreen}
-              className="p-2 rounded-lg bg-white text-gray-700 hover:bg-gray-50 transition-all"
-              title={isFullScreen ? "Sair da tela cheia" : "Tela cheia"}
+              className="p-2.5 rounded-xl bg-white text-gray-700 hover:bg-gray-50 transition-all border border-gray-200"
+              title={isFullScreen ? 'Sair da tela cheia' : 'Tela cheia'}
             >
               {isFullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Grid de Portas */}
       {loading ? (
         <div className="grid grid-cols-10 sm:grid-cols-12 md:grid-cols-14 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(i => (
+          {Array.from({ length: 216 }).map((_, i) => (
             <div key={i} className="aspect-square bg-gray-200 rounded-sm animate-pulse" />
           ))}
         </div>
