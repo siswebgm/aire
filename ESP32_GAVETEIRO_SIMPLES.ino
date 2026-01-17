@@ -1,5 +1,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
+ #include <WiFiUdp.h>
+ #include "mbedtls/sha256.h"
+ #include "esp_task_wdt.h"
 
 /* =====================================================
    ESP32 SIMPLES - SEM MCP23017
@@ -20,6 +23,9 @@ const char* WIFI_SSID = "NEW LINK - CAMILLA 2G";
 const char* WIFI_PASSWORD = "NG147068";
 
 const char* FW_VERSION = "AIRE-ESP32-SIMPLES-2026-01-04";
+
+// Se false: usa DHCP (recomendado) e você confirma o IP via /discovery, /identify ou Serial
+const bool USE_STATIC_IP = false;
 
 IPAddress STATIC_IP(192, 168, 1, 75);
 IPAddress STATIC_GATEWAY(192, 168, 1, 254);
@@ -57,6 +63,8 @@ WebServer server(80);
 
 bool pulsoAtivo[NUM_PORTAS]  = {false};
 unsigned long tempoInicioPulso[NUM_PORTAS] = {0};
+
+bool portaAberta[NUM_PORTAS] = {false};
 
 bool sensorFechado[NUM_PORTAS] = {false};
 bool sensorEstadoAnterior[NUM_PORTAS] = {false};
@@ -112,7 +120,7 @@ String sha256(String input) {
    CONEXÃO WiFi COM DHCP
    ===================================================== */
 bool conectarWiFi() {
-  Serial.println("[AIRE] Conectando ao WiFi (DHCP)...");
+  Serial.println("[AIRE] Conectando ao WiFi...");
   Serial.println("[AIRE] SSID: " + String(WIFI_SSID));
 
   // Gera nome único
@@ -123,11 +131,15 @@ bool conectarWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostname.c_str());
 
-  if (!WiFi.config(STATIC_IP, STATIC_GATEWAY, STATIC_SUBNET, STATIC_DNS1, STATIC_DNS2)) {
-    Serial.println("[AIRE] ❌ Falha ao configurar IP estático");
+  if (USE_STATIC_IP) {
+    if (!WiFi.config(STATIC_IP, STATIC_GATEWAY, STATIC_SUBNET, STATIC_DNS1, STATIC_DNS2)) {
+      Serial.println("[AIRE] ❌ Falha ao configurar IP estático (seguindo com DHCP)");
+    } else {
+      Serial.print("[AIRE] IP estático configurado: ");
+      Serial.println(STATIC_IP);
+    }
   } else {
-    Serial.print("[AIRE] IP estático configurado: ");
-    Serial.println(STATIC_IP);
+    Serial.println("[AIRE] DHCP habilitado (sem IP estático)");
   }
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);

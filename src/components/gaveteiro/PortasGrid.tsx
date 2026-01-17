@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { 
   DoorOpen, 
   DoorClosed, 
+  Lock,
   Clock, 
   Check, 
   Unlock, 
@@ -42,7 +43,7 @@ function getStatusConfig(status: StatusPorta) {
         bgColor: 'bg-green-100',
         textColor: 'text-green-700',
         borderColor: 'border-green-300',
-        icon: DoorOpen,
+        icon: Lock,
         iconBg: 'bg-green-500'
       }
     case 'OCUPADO':

@@ -64,7 +64,14 @@ export default async function handler(
       return res.status(400).json({ error: `Condomínio não encontrado: ${condominioError?.message || 'UID inválido'}` })
     }
 
-    const esp32Ip = condominio.esp32_ip || '192.168.1.76' // Usa default se null
+    const esp32Ip = String(condominio.esp32_ip || '').trim()
+    if (!esp32Ip) {
+      return res.status(400).json({
+        success: false,
+        error: 'ESP32 não configurado para este condomínio. Configure o campo esp32_ip em gvt_condominios.'
+      })
+    }
+
     console.log(`[TOTEM] IP do condomínio "${condominio.nome}": ${esp32Ip}`)
 
     // Verificar se é IP local ou público

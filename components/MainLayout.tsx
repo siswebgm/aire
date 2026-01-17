@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import Link from 'next/link'
-import { Activity, Building2, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutGrid, LogOut, Menu, Package, User, Users, Wifi, X } from 'lucide-react'
+import { Activity, Building2, ChevronLeft, ChevronRight, LayoutGrid, LogOut, Menu, Package, User, Users, Wifi, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useAuth } from '../src/contexts/AuthContext'
 
@@ -40,7 +40,6 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
     { href: '/totem-kiosk', label: 'Totem', icon: Package },
     { href: '/moradores', label: 'Moradores', icon: Users },
     { href: '/blocos', label: 'Blocos', icon: Building2 },
-    { href: '/relatorio', label: 'Relatório', icon: FileSpreadsheet },
     { href: '/movimentos', label: 'Movimentos', icon: Activity },
     { href: '/configurar-esp32', label: 'Configurar ESP', icon: Wifi, adminOnly: true }
   ]
@@ -83,7 +82,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className={`${isTotem ? 'bg-slate-50' : 'bg-gray-50/80'} flex flex-col h-screen w-full overflow-hidden`}>
+    <div className={`${isTotem ? 'bg-slate-50' : 'bg-gray-50/80'} flex flex-col min-h-screen w-full`}>
       <style jsx global>{`
         /* Scrollbar ultrafina */
         ::-webkit-scrollbar {
@@ -109,8 +108,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       <header
         className={
           isTotem
-            ? 'relative z-[60] overflow-visible text-white shadow-lg bg-gradient-to-br from-slate-700/90 via-slate-600/90 to-slate-800/90 backdrop-blur-sm'
-            : 'relative z-[60] overflow-visible bg-gradient-to-r from-sky-500/80 via-sky-600/80 to-blue-700/80 text-white shadow-lg backdrop-blur-sm'
+            ? 'fixed top-0 inset-x-0 z-[60] overflow-visible text-white shadow-lg bg-gradient-to-br from-slate-700/90 via-slate-600/90 to-slate-800/90 backdrop-blur-sm'
+            : 'fixed top-0 inset-x-0 z-[60] overflow-visible bg-gradient-to-r from-sky-500/80 via-sky-600/80 to-blue-700/80 text-white shadow-lg backdrop-blur-sm'
         }
       >
         <div className="w-full px-3 sm:px-6 lg:px-8 py-2 sm:py-3">
@@ -188,26 +187,26 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                 {menuAberto && (
                   <>
                     <div className="fixed inset-0 z-[70]" onClick={() => setMenuAberto(false)} />
-                    <div className="absolute right-0 top-full mt-2 w-64 bg-gradient-to-br from-sky-50 to-blue-100 rounded-xl shadow-2xl border border-sky-200 z-[80]">
-                      <div className="p-4 border-b border-sky-200 rounded-t-xl">
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 z-[80]">
+                      <div className="p-4 border-b border-slate-200 rounded-t-xl">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold">
                             {usuario.nome.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-semibold text-sky-800">{usuario.nome}</p>
-                            <p className="text-xs text-sky-600">{usuario.email || 'Usuário'}</p>
+                            <p className="font-semibold text-slate-900">{usuario.nome}</p>
+                            <p className="text-xs text-slate-500">{usuario.email || 'Usuário'}</p>
                           </div>
                         </div>
                       </div>
-                      <div className="p-3 border-b border-sky-200">
-                        <div className="flex items-center gap-2 text-sm text-sky-700">
-                          <Building2 size={14} className="text-sky-600" />
+                      <div className="p-3 border-b border-slate-200">
+                        <div className="flex items-center gap-2 text-sm text-slate-700">
+                          <Building2 size={14} className="text-slate-500" />
                           <span className="font-medium">{condominio?.nome || 'Condomínio'}</span>
                         </div>
                       </div>
-                      <div className="px-3 py-2 border-b border-sky-200">
-                        <div className="flex items-center justify-between text-xs text-sky-500">
+                      <div className="px-3 py-2 border-b border-slate-200">
+                        <div className="flex items-center justify-between text-xs text-slate-500">
                           <span>AIRE v1.0</span>
                           <span>{new Date().getFullYear()}</span>
                         </div>
@@ -219,7 +218,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                             setMenuAberto(false)
                             router.push('/perfil')
                           }}
-                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sky-700 hover:bg-sky-100/70 rounded-lg transition-colors font-semibold text-sm"
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-slate-700 hover:bg-slate-100 rounded-lg transition-colors font-semibold text-sm"
                         >
                           <User size={16} />
                           Meu perfil
@@ -244,13 +243,22 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
+      <div className="h-14 sm:h-16" />
+
       <div className="flex flex-1 w-full min-h-0">
         {/* Sidebar desktop */}
+        <div
+          className={
+            isTotem
+              ? 'hidden'
+              : `hidden sm:block ${sidebarRecolhida ? 'w-20' : 'w-64'} flex-shrink-0`
+          }
+        />
         <aside
           className={
             isTotem
               ? 'hidden'
-              : `hidden sm:flex ${sidebarRecolhida ? 'w-20' : 'w-64'} h-full flex-col bg-white/70 backdrop-blur-xl border-r border-gray-200/70 shadow-sm ring-1 ring-black/5 transition-[width] duration-200`
+              : `hidden sm:flex ${sidebarRecolhida ? 'w-20' : 'w-64'} fixed left-0 top-14 sm:top-16 h-[calc(100vh-3.5rem)] sm:h-[calc(100vh-4rem)] flex-col bg-white/70 backdrop-blur-xl border-r border-gray-200/70 shadow-sm ring-1 ring-black/5 transition-[width] duration-200 overflow-y-auto z-50`
           }
         >
           <div className="p-4 border-b border-gray-200/70 bg-gradient-to-br from-white/80 via-white/60 to-slate-50/60 backdrop-blur-xl">
@@ -313,8 +321,10 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           </>
         )}
 
-        <main className="flex-1 min-w-0 min-h-0 p-3 sm:p-5 lg:p-7 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-slate-100">
-          <div className="w-full max-w-full">{children}</div>
+        <main className="flex-1 min-w-0 min-h-0 p-2 sm:p-3 lg:p-4 overflow-x-hidden bg-slate-100 flex flex-col items-stretch">
+          <div className="w-full max-w-full flex flex-col min-h-full bg-white/70 backdrop-blur-sm border border-white/60 shadow-sm p-3 sm:p-5">
+            {children}
+          </div>
         </main>
       </div>
     </div>

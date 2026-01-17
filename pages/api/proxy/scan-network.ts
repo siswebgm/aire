@@ -1,4 +1,63 @@
 import { NextApiRequest, NextApiResponse } from 'next'
+ import os from 'os'
+
+ function normalizeClientIp(raw: unknown): string | null {
+   if (!raw || typeof raw !== 'string') return null
+
+   // x-forwarded-for can be a list: "client, proxy1, proxy2"
+   const first = raw.split(',')[0]?.trim()
+   if (!first) return null
+
+   // IPv6-mapped IPv4: ::ffff:192.168.1.10
+   if (first.startsWith('::ffff:')) return first.replace('::ffff:', '')
+
+   return first
+ }
+
+ function getLocalLanIPv4(): string | null {
+   const nets = os.networkInterfaces()
+   for (const name of Object.keys(nets)) {
+     const addrs = nets[name] ?? []
+     for (const addr of addrs) {
+       if (!addr) continue
+       if (addr.family !== 'IPv4') continue
+       if (addr.internal) continue
+
+       // Prefer private ranges
+       const ip = addr.address
+       if (
+         ip.startsWith('192.168.') ||
+         ip.startsWith('10.') ||
+         ip.startsWith('172.16.') ||
+         ip.startsWith('172.17.') ||
+         ip.startsWith('172.18.') ||
+         ip.startsWith('172.19.') ||
+         ip.startsWith('172.2') ||
+         ip.startsWith('172.30.') ||
+         ip.startsWith('172.31.')
+       ) {
+         return ip
+       }
+     }
+   }
+
+   // Fallback: first non-internal IPv4
+   for (const name of Object.keys(nets)) {
+     const addrs = nets[name] ?? []
+     for (const addr of addrs) {
+       if (!addr) continue
+       if (addr.family === 'IPv4' && !addr.internal) return addr.address
+     }
+   }
+
+   return null
+ }
+
+ function getNetworkRangeFromIp(ip: string): string | null {
+   const ipParts = ip.split('.')
+   if (ipParts.length !== 4) return null
+   return `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`
+ }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -7,32 +66,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Obtém informações da rede do cliente
-    const clientIP = req.headers['x-forwarded-for'] || 
-                    req.headers['x-real-ip'] || 
-                    req.connection.remoteAddress
+    const rawClientIP = (req.headers['x-forwarded-for'] as string | undefined) ||
+      (req.headers['x-real-ip'] as string | undefined) ||
+      (req.connection.remoteAddress as string | undefined)
 
-    console.log(`[SCAN] Client IP: ${clientIP}`)
+    const clientIP = normalizeClientIp(rawClientIP)
+    console.log(`[SCAN] Client IP (raw): ${rawClientIP}`)
+    console.log(`[SCAN] Client IP (normalized): ${clientIP}`)
 
-    // Se não conseguir determinar o IP, retorna ranges comuns
-    if (!clientIP || typeof clientIP !== 'string') {
+    let networkRange = clientIP ? getNetworkRangeFromIp(clientIP) : null
+    const isLocalhostClient = clientIP === '127.0.0.1' || clientIP === '::1'
+
+    if (!networkRange || isLocalhostClient) {
+      const lanIp = getLocalLanIPv4()
+      const lanRange = lanIp ? getNetworkRangeFromIp(lanIp) : null
+      console.log(`[SCAN] LAN IP detected: ${lanIp}`)
+      console.log(`[SCAN] LAN range detected: ${lanRange}`)
+      networkRange = lanRange
+    }
+
+    // Se ainda não conseguir determinar o range, retorna ranges comuns
+    if (!networkRange) {
       return res.status(200).json({
         success: true,
         ranges: ['192.168.1', '192.168.0', '192.168.2', '10.0.0', '172.16.0'],
-        message: 'Usando ranges comuns (não foi possível determinar a rede)'
+        message: 'Não foi possível determinar a rede automaticamente, usando ranges comuns'
       })
     }
-
-    // Extrai o range do IP do cliente
-    const ipParts = clientIP.split('.')
-    if (ipParts.length !== 4) {
-      return res.status(200).json({
-        success: true,
-        ranges: ['192.168.1', '192.168.0', '192.168.2', '10.0.0', '172.16.0'],
-        message: 'IP inválido, usando ranges comuns'
-      })
-    }
-
-    const networkRange = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`
 
     // Gera lista de IPs para testar (limitado para não sobrecarregar)
     const ipsToTest = []

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useRouter } from 'next/router'
+import QRCode from 'react-qr-code'
 import { 
   Package, 
   Loader2, 
@@ -34,9 +35,10 @@ import {
   listarPortas, 
   listarBlocos, 
   listarApartamentos,
-  ocuparPorta,
+  ocuparPortaViaApi,
   abrirPortaEsp32,
   solicitarAberturaPortaIot,
+  atualizarSensorImaPorNumero,
   type Destinatario,
   type SenhaDestinatario
 } from '../services/gaveteiroService'
@@ -187,6 +189,13 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   const [senhasGeradas, setSenhasGeradas] = useState<SenhaDestinatario[]>([])
   const [mensagemErro, setMensagemErro] = useState('')
   const [processando, setProcessando] = useState(false)
+  const [cancelandoOperacao, setCancelandoOperacao] = useState(false)
+  const [confirmandoFechamento, setConfirmandoFechamento] = useState(false)
+  const [mensagemConfirmarFechamento, setMensagemConfirmarFechamento] = useState('')
+  const [finalizadoEm, setFinalizadoEm] = useState<number | null>(null)
+  const sensorPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [depositoDeadline, setDepositoDeadline] = useState<number | null>(null)
+  const [depositoRestanteMs, setDepositoRestanteMs] = useState<number>(0)
   
   // Busca
   const [buscaBloco, setBuscaBloco] = useState('')
@@ -490,7 +499,7 @@ useEffect(() => {
          voice.name.includes('Maria') || 
          voice.name.includes('Camila') ||
          voice.name.includes('Luciana') ||
-         voice.gender === 'female')
+         (voice as any).gender === 'female')
       )
       
       if (femaleVoices.length > 0) {
@@ -641,7 +650,7 @@ useEffect(() => {
     }
   }
 
-  const portasDisponiveis = portas.filter(p => p.status_atual === 'DISPONIVEL')
+  const portasDisponiveis = portas.filter(p => p.status_atual === 'DISPONIVEL' && !(p as any).reservada_portaria)
   const portasDisponiveisTotalPages = Math.max(1, Math.ceil(portasDisponiveis.length / portaPageSize))
   const portasDisponiveisPaginadas = portasDisponiveis.slice(
     (portaPage - 1) * portaPageSize,
@@ -668,6 +677,232 @@ useEffect(() => {
   const portaSensorAberta = sensorImaStatusNormalizado === 'aberto'
   const portaSensorFechada = sensorImaStatusNormalizado === 'fechado'
   const portaSensorAbrindo = !portaSensorAberta && !portaSensorFechada
+
+  const kioskTelaSucesso = isKiosk && etapa === 'sucesso'
+
+  const comprovantePayload = {
+    tipo: 'COMPROVANTE_TOTEM',
+    condominio_uid: condominio?.uid || null,
+    porta: portaSelecionadaAtualizada?.numero_porta || null,
+    criado_em: new Date().toISOString(),
+    finalizado_em: finalizadoEm ? new Date(finalizadoEm).toISOString() : null,
+    total_destinos: destinatarios.length,
+    total_encomendas: destinatarios.reduce((sum, d) => sum + (d.quantidade || 0), 0),
+    destinatarios,
+    senhas: senhasGeradas
+  }
+
+  const encodeBase64Utf8 = (input: string) => {
+    const bytes = new TextEncoder().encode(input)
+    let binary = ''
+    bytes.forEach(b => {
+      binary += String.fromCharCode(b)
+    })
+    return btoa(binary)
+  }
+
+  const comprovanteTotemJson = JSON.stringify(comprovantePayload)
+  const comprovanteEncoded = encodeURIComponent(encodeBase64Utf8(comprovanteTotemJson))
+  const comprovantePath = `/comprovante?d=${comprovanteEncoded}`
+  const comprovanteUrl = typeof window === 'undefined' ? comprovantePath : `${window.location.origin}${comprovantePath}`
+
+  const copiarComprovanteTotem = async () => {
+    try {
+      await navigator.clipboard.writeText(comprovanteUrl)
+    } catch (error) {
+      console.warn('[TOTEM] Falha ao copiar comprovante:', error)
+    }
+  }
+
+  const cancelarOperacaoTotem = async (motivo: string) => {
+    if (!condominio?.uid) return
+    if (portaSensorFechada) return
+    if (!portaSelecionadaAtualizada?.numero_porta) {
+      reiniciar()
+      return
+    }
+
+    if (sensorPollingRef.current) {
+      clearInterval(sensorPollingRef.current)
+      sensorPollingRef.current = null
+    }
+
+    setCancelandoOperacao(true)
+    try {
+      const response = await fetch('/api/totem/cancelar-porta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          condominioUid: condominio.uid,
+          numeroPorta: portaSelecionadaAtualizada.numero_porta,
+          motivo
+        })
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        console.error('[TOTEM] Falha ao cancelar porta:', data)
+      }
+    } catch (error) {
+      console.error('[TOTEM] Erro ao cancelar operação:', error)
+    } finally {
+      setCancelandoOperacao(false)
+      reiniciar()
+    }
+  }
+
+  const confirmarFechamentoManual = async () => {
+    if (!condominio?.uid) return
+    if (etapa !== 'sucesso') return
+    if (!portaSelecionadaAtualizada?.numero_porta) return
+    if (portaSensorFechada) return
+    if (cancelandoOperacao || confirmandoFechamento) return
+
+    setMensagemConfirmarFechamento('')
+    setConfirmandoFechamento(true)
+
+    try {
+      const TIMEOUT_MS = 8_000
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
+      console.log('[TOTEM] confirmarFechamentoManual -> request', {
+        condominioUid: condominio.uid,
+        numeroPorta: portaSelecionadaAtualizada.numero_porta
+      })
+
+      let response: Response
+      try {
+        response = await fetch('/api/totem/confirmar-fechamento', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio.uid,
+            numeroPorta: portaSelecionadaAtualizada.numero_porta
+          }),
+          signal: controller.signal
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
+
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok || !data?.success) {
+        setMensagemConfirmarFechamento(data?.error || 'Não foi possível confirmar o fechamento')
+        return
+      }
+
+      ;(() => {
+        const SENSOR_TIMEOUT_MS = 4_000
+        const sensorController = new AbortController()
+        const sensorTimeoutId = setTimeout(() => sensorController.abort(), SENSOR_TIMEOUT_MS)
+        fetch('/api/totem/sensor-porta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio.uid,
+            numeroPorta: portaSelecionadaAtualizada.numero_porta
+          }),
+          signal: sensorController.signal
+        })
+          .then(() => null)
+          .catch(() => null)
+          .finally(() => clearTimeout(sensorTimeoutId))
+      })()
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        setMensagemConfirmarFechamento('Tempo esgotado ao confirmar. Verifique a conexão e tente novamente.')
+        return
+      }
+      setMensagemConfirmarFechamento(error?.message || 'Não foi possível confirmar o fechamento')
+    } finally {
+      setConfirmandoFechamento(false)
+    }
+  }
+
+  useEffect(() => {
+    if (sensorPollingRef.current) {
+      clearInterval(sensorPollingRef.current)
+      sensorPollingRef.current = null
+    }
+
+    if (!condominio?.uid) return
+    if (etapa !== 'sucesso') return
+    if (!portaSelecionadaAtualizada?.numero_porta) return
+    if (portaSensorFechada) return
+    if (cancelandoOperacao) return
+
+    const consultar = async () => {
+      try {
+        await fetch('/api/totem/sensor-porta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio.uid,
+            numeroPorta: portaSelecionadaAtualizada.numero_porta
+          })
+        })
+      } catch (error) {
+        console.warn('[TOTEM] Erro ao consultar sensor:', error)
+      }
+    }
+
+    consultar()
+    sensorPollingRef.current = setInterval(consultar, 1000)
+
+    return () => {
+      if (sensorPollingRef.current) {
+        clearInterval(sensorPollingRef.current)
+        sensorPollingRef.current = null
+      }
+    }
+  }, [condominio?.uid, etapa, portaSelecionadaAtualizada?.numero_porta, portaSensorFechada, cancelandoOperacao])
+
+  useEffect(() => {
+    if (etapa !== 'sucesso') {
+      setDepositoDeadline(null)
+      setDepositoRestanteMs(0)
+      return
+    }
+    if (!portaSelecionadaAtualizada?.numero_porta) return
+    if (portaSensorFechada) {
+      setDepositoDeadline(null)
+      setDepositoRestanteMs(0)
+      return
+    }
+    if (cancelandoOperacao) return
+
+    const DEPOSITO_TIMEOUT_MS = 90_000
+    const deadline = Date.now() + DEPOSITO_TIMEOUT_MS
+    setDepositoDeadline(deadline)
+    setDepositoRestanteMs(DEPOSITO_TIMEOUT_MS)
+  }, [etapa, portaSelecionadaAtualizada?.numero_porta, portaSensorFechada, cancelandoOperacao])
+
+  useEffect(() => {
+    if (!depositoDeadline) return
+    if (portaSensorFechada) return
+    if (cancelandoOperacao) return
+
+    const tick = () => {
+      const restante = Math.max(0, depositoDeadline - Date.now())
+      setDepositoRestanteMs(restante)
+
+      if (restante <= 0) {
+        cancelarOperacaoTotem('Cancelamento automático (tempo esgotado)')
+      }
+    }
+
+    tick()
+    const id = setInterval(tick, 250)
+    return () => clearInterval(id)
+  }, [depositoDeadline, portaSensorFechada, cancelandoOperacao])
+
+  const formatarTempo = (ms: number) => {
+    const total = Math.ceil(ms / 1000)
+    const min = Math.floor(total / 60)
+    const seg = total % 60
+    return `${String(min)}:${String(seg).padStart(2, '0')}`
+  }
 
   const headerSubtitle = (() => {
     if (etapa === 'selecionar_bloco') return 'Escolha o bloco de destino'
@@ -708,6 +943,14 @@ useEffect(() => {
       reiniciar()
     }
   }, [autoFinalizarEm])
+
+  useEffect(() => {
+    if (etapa !== 'sucesso' || !portaSensorFechada) {
+      setFinalizadoEm(null)
+      return
+    }
+    setFinalizadoEm(prev => (prev ? prev : Date.now()))
+  }, [etapa, portaSensorFechada])
 
   const blocosFiltrados = blocos.filter(b => 
     b.nome.toLowerCase().includes(buscaBloco.toLowerCase())
@@ -797,6 +1040,19 @@ useEffect(() => {
       return next
     })
   }
+
+  const promiseWithTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
+    })
+
+    try {
+      return await Promise.race([promise, timeoutPromise])
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }
   
   // Voltar para seleção de blocos (outro bloco)
   const voltarParaBlocos = () => {
@@ -874,6 +1130,9 @@ useEffect(() => {
     console.log('[TOTEM DEBUG] Speech Synthesis disponível:', 'speechSynthesis' in window)
     
     try {
+      const OCUPAR_TIMEOUT_MS = 20_000
+      const ABRIR_TIMEOUT_MS = 20_000
+
       // Enviar destinatários agregados (com quantidade) para persistir no banco.
       // A expansão por quantidade para gerar senhas/itens é feita no backend (ocuparPorta).
       const listaDestinatarios: Destinatario[] = destinatarios.map(d => ({
@@ -883,13 +1142,19 @@ useEffect(() => {
       }))
 
       // Ocupar porta com múltiplos destinatários
-      const resultado = await ocuparPorta({
-        portaUid: portaSelecionada.uid,
-        condominioUid: condominio.uid,
-        destinatarios: listaDestinatarios,
-        usuarioUid: usuario?.uid,
-        observacao: `Ocupação via Totem - ${totalEncomendas} encomenda(s)`
-      })
+      const tOcuparIni = performance.now()
+      const resultado = await promiseWithTimeout(
+        ocuparPortaViaApi({
+          portaUid: portaSelecionada.uid,
+          condominioUid: condominio.uid,
+          destinatarios: listaDestinatarios,
+          usuarioUid: usuario?.uid,
+          observacao: `Ocupação via Totem - ${totalEncomendas} encomenda(s)`
+        }),
+        OCUPAR_TIMEOUT_MS,
+        'Tempo esgotado ao confirmar ocupação. Tente novamente.'
+      )
+      console.log('[TOTEM] ocuparPortaViaApi duração(ms):', Math.round(performance.now() - tOcuparIni))
 
       console.log('[TOTEM] Porta ocupada no banco, preparando para abrir fisicamente...')
 
@@ -902,215 +1167,92 @@ useEffect(() => {
         console.log('[TOTEM] Iniciando abertura física da porta...')
         
         try {
-          // Gerar token SHA256 dinâmico como o ESP32 espera
-          const AIRE_ESP_SECRET = "AIRE_2025_SUPER_SECRETO"
-          const base = `${condominio.uid}:${portaSelecionada.uid}:${portaSelecionada.numero_porta}:${AIRE_ESP_SECRET}`
-          
-          // Gerar SHA256
-          const msgBuffer = new TextEncoder().encode(base)
-          const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer)
-          const hashArray = Array.from(new Uint8Array(hashBuffer))
-          const token = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-          
-          // 🎨 USAR IP DINÂMICO DO BANCO (COMO AS OUTRAS PÁGINAS)
-          let baseUrl = '192.168.1.76' // fallback
-          
-          // Tentar buscar IP dinâmico do banco
+          const controller = new AbortController()
+          const abortTimeout = setTimeout(() => controller.abort(), ABRIR_TIMEOUT_MS)
+          const tAbrirIni = performance.now()
+
+          let response: Response
           try {
-            const response = await fetch('/api/proxy/buscar-condominio', {
+            response = await fetch('/api/proxy/abrir-porta-individual', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ condominioUid: condominio.uid })
+              body: JSON.stringify({
+                condominioUid: condominio.uid,
+                portaUid: portaSelecionada.uid,
+                porta: portaSelecionada.numero_porta
+              }),
+              signal: controller.signal
             })
-            
-            if (response.ok) {
-              const data = await response.json()
-              if (data.esp32Ip) {
-                baseUrl = data.esp32Ip
-                console.log('[TOTEM] Usando IP dinâmico do banco:', baseUrl)
-              }
-            }
-          } catch (error) {
-            console.warn('[TOTEM] Erro ao buscar IP dinâmico, usando fallback:', error)
+          } finally {
+            clearTimeout(abortTimeout)
           }
-          
-          // Se o código for um nome, usar o IP dinâmico
-          if (!gaveteiro.codigo_hardware.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-            console.log('[TOTEM] Código não é IP, usando IP dinâmico:', baseUrl)
+
+          console.log('[TOTEM] abrir-porta-individual duração(ms):', Math.round(performance.now() - tAbrirIni))
+
+          const data = await response.json().catch(() => null)
+
+          if (!response.ok || !data?.success) {
+            console.warn('[TOTEM] Falha ao abrir porta via proxy:', data)
           } else {
-            // Se for IP, usar o código diretamente
-            baseUrl = gaveteiro.codigo_hardware
-            console.log('[TOTEM] Código é IP, usando diretamente:', baseUrl)
-          }
-          
-          const url = `http://${baseUrl}/abrir?condominio_uid=${condominio.uid}&porta_uid=${portaSelecionada.uid}&porta=${portaSelecionada.numero_porta}&token=${token}`
-          console.log('[TOTEM] GET para abrir porta (confirmação):', url)
-          console.log('[TOTEM] Base para token:', base)
-          console.log('[TOTEM] Token gerado:', token)
-          console.log('[TOTEM DEBUG] URL length:', url.length)
-          
-          // Fazer requisição para abrir porta
-          const img = new Image()
-          img.src = url
-          
-          // 🎨 TIMEOUT MAIS LONGO E MELHOR LOGGING
-          const timeout = setTimeout(() => {
-            console.log('[TOTEM] TIMEOUT: Requisição para ESP32 demorou demais (10s)')
-            console.log('[TOTEM] URL tentada:', url)
-            console.log('[TOTEM] ESP32 pode estar offline ou IP incorreto')
-            
-            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
+            console.log('[TOTEM] Porta aberta com sucesso (proxy)!')
+
+            await atualizarSensorImaPorNumero(
+              portaSelecionada.gaveteiro_uid,
+              portaSelecionada.numero_porta,
+              'aberto'
+            ).catch((error) => {
+              console.warn('[TOTEM] Falha ao marcar sensor como aberto:', error)
+            })
+
             if ('speechSynthesis' in window) {
-              console.log('[TOTEM] Reproduzindo áudio mesmo com timeout...')
-              
-              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
-              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
-              utterance.lang = 'pt-BR'
-              utterance.rate = 1.8      // 🎨 Mais rápido (era 1.5)
-              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
-              utterance.volume = 1.0
-              
-              // 🎨 ESCOLHER VOZ FEMININA SE DISPONÍVEL
-              const voices = window.speechSynthesis.getVoices()
-              const femaleVoice = voices.find(voice => 
-                voice.lang.includes('pt-BR') && 
-                (voice.name.includes('Female') || 
-                 voice.name.includes('Maria') || 
-                 voice.name.includes('Camila') ||
-                 voice.name.includes('Luciana') ||
-                 voice.gender === 'female')
+              const utterance = new SpeechSynthesisUtterance(
+                `Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`
               )
-              
-              if (femaleVoice) {
-                utterance.voice = femaleVoice
-                console.log('[TOTEM] Usando voz feminina:', femaleVoice.name)
-              } else {
-                // Fallback para qualquer voz brasileira
-                const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
-                if (brazilianVoice) {
-                  utterance.voice = brazilianVoice
-                  console.log('[TOTEM] Usando voz brasileira:', brazilianVoice.name)
-                }
-              }
-              
-              // 🎨 PRÉ-CARREGAR VOZES SE NECESSÁRIO
-              if (voices.length === 0) {
-                window.speechSynthesis.getVoices()
-                setTimeout(() => {
-                  window.speechSynthesis.cancel()
-                  window.speechSynthesis.speak(utterance)
-                }, 100)
-              } else {
-                window.speechSynthesis.cancel()
-                window.speechSynthesis.speak(utterance)
-              }
-              
-              console.log('[TOTEM] Áudio configurado com voz feminina e velocidade aumentada')
-            } else {
-              console.warn('[TOTEM] Síntese de voz não disponível')
-            }
-          }, 10000) // 10 segundos
-          
-          img.onerror = (error) => {
-            console.log('[TOTEM] Requisição enviada (pode ter falhado silenciosamente)')
-            console.log('[TOTEM DEBUG] Image onerror:', error)
-            
-            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
-            if ('speechSynthesis' in window) {
-              console.log('[TOTEM] Tentando reproduzir áudio (onerror)...')
-              
-              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
-              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
               utterance.lang = 'pt-BR'
-              utterance.rate = 1.8      // 🎨 Mais rápido
-              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
+              utterance.rate = 1.8
+              utterance.pitch = 1.2
               utterance.volume = 1.0
-              
-              // 🎨 ESCOLHER VOZ FEMININA
+
               const voices = window.speechSynthesis.getVoices()
-              const femaleVoice = voices.find(voice => 
-                voice.lang.includes('pt-BR') && 
-                (voice.name.includes('Female') || 
-                 voice.name.includes('Maria') || 
-                 voice.name.includes('Camila') ||
-                 voice.name.includes('Luciana') ||
-                 voice.gender === 'female')
+              const femaleVoice = voices.find(voice =>
+                voice.lang.includes('pt-BR') &&
+                (voice.name.includes('Female') ||
+                  voice.name.includes('Maria') ||
+                  voice.name.includes('Camila') ||
+                  voice.name.includes('Luciana') ||
+                  (voice as any).gender === 'female')
               )
-              
+
               if (femaleVoice) {
                 utterance.voice = femaleVoice
               } else {
                 const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
                 if (brazilianVoice) utterance.voice = brazilianVoice
               }
-              
-              utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
-              utterance.onend = () => console.log('[TOTEM] Áudio terminou')
-              utterance.onerror = (e) => console.error('[TOTEM] Erro no áudio:', e)
-              
+
               window.speechSynthesis.cancel()
               window.speechSynthesis.speak(utterance)
-              console.log('[TOTEM] Áudio reproduzido: Porta aberta')
-            } else {
-              console.warn('[TOTEM] Síntese de voz não disponível')
-            }
-          }
-          
-          img.onload = () => {
-            console.log('[TOTEM] Porta aberta com sucesso!')
-            clearTimeout(timeout)
-            
-            // 🎨 ÁUDIO COM VOZ FEMININA E MAIS RÁPIDO
-            if ('speechSynthesis' in window) {
-              console.log('[TOTEM] Tentando reproduzir áudio (onload)...')
-              
-              // 🎨 CONFIGURAÇÃO DE VOZ FEMININA
-              const utterance = new SpeechSynthesisUtterance(`Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`)
-              utterance.lang = 'pt-BR'
-              utterance.rate = 1.8      // 🎨 Mais rápido
-              utterance.pitch = 1.2     // 🎨 Tom mais agudo (voz feminina)
-              utterance.volume = 1.0
-              
-              // 🎨 ESCOLHER VOZ FEMININA
-              const voices = window.speechSynthesis.getVoices()
-              const femaleVoice = voices.find(voice => 
-                voice.lang.includes('pt-BR') && 
-                (voice.name.includes('Female') || 
-                 voice.name.includes('Maria') || 
-                 voice.name.includes('Camila') ||
-                 voice.name.includes('Luciana') ||
-                 voice.gender === 'female')
-              )
-              
-              if (femaleVoice) {
-                utterance.voice = femaleVoice
-              } else {
-                const brazilianVoice = voices.find(voice => voice.lang.includes('pt-BR'))
-                if (brazilianVoice) utterance.voice = brazilianVoice
-              }
-              
-              utterance.onstart = () => console.log('[TOTEM] Áudio iniciou')
-              utterance.onend = () => console.log('[TOTEM] Áudio terminou')
-              utterance.onerror = (e) => console.error('[TOTEM] Erro no áudio:', e)
-              
-              window.speechSynthesis.cancel()
-              window.speechSynthesis.speak(utterance)
-              console.log('[TOTEM] Áudio reproduzido: Porta aberta')
-            } else {
-              console.warn('[TOTEM] Síntese de voz não disponível')
             }
           }
           
         } catch (espError: any) {
-          console.error('[TOTEM] Erro ao abrir porta:', espError?.message)
+          const abortMsg = espError?.name === 'AbortError'
+            ? 'Tempo esgotado ao tentar abrir a porta. Verifique a conexão e tente novamente.'
+            : espError?.message
+
+          console.error('[TOTEM] Erro ao abrir porta:', abortMsg)
           console.error('[TOTEM] Stack:', espError?.stack)
+
+          if (espError?.name === 'AbortError') {
+            throw new Error('Tempo esgotado ao tentar abrir a porta. Tente novamente.')
+          }
         }
       } else {
         console.warn('[TOTEM] Porta não possui gaveteiro.codigo_hardware')
         console.log('[TOTEM] portaSelecionada:', portaSelecionada)
       }
 
-      setSenhasGeradas(resultado.senhas)
+      setSenhasGeradas((resultado as any).senhas)
       setEtapa('sucesso')
       
     } catch (error: any) {
@@ -1153,11 +1295,302 @@ useEffect(() => {
     )
   }
 
+  if (etapa === 'confirmando') {
+    return (
+      <div
+        ref={fullscreenTargetRef}
+        data-etapa={etapa}
+        className={`${embeddedBleedClass} h-screen p-0 flex items-center justify-center overflow-x-hidden bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900`}
+      >
+        <div className="w-full max-w-xl mx-6 bg-white/95 border border-white/20 rounded-3xl shadow-2xl p-10 text-center">
+          <div className="text-xs font-extrabold tracking-[0.24em] text-slate-500">PROCESSANDO</div>
+          <h2 className="mt-4 text-3xl font-extrabold text-slate-950">Abrindo a porta do gaveteiro</h2>
+          <p className="mt-2 text-lg font-semibold text-slate-600">Aguarde destravar para depositar.</p>
+          <div className="mt-8 flex items-center justify-center">
+            <Loader2 className="w-10 h-10 animate-spin text-sky-600" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (kioskTelaSucesso) {
+    return (
+      <div
+        ref={fullscreenTargetRef}
+        data-etapa={etapa}
+        className={`${embeddedBleedClass} h-screen p-0 flex flex-col overflow-x-hidden bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900`}
+      >
+        {isKiosk && protecaoTelaAtiva && (
+          <div
+            className="fixed inset-0 z-[100] text-white bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900"
+            onPointerDown={onKioskOverlayPointerDown}
+            onPointerUp={onKioskOverlayPointerUp}
+            onPointerCancel={onKioskOverlayPointerCancel}
+            onPointerLeave={onKioskOverlayPointerCancel}
+            role="button"
+            aria-label="Toque para voltar"
+          >
+            {(KIOSK_SCREENSAVER_VIDEO_URL || KIOSK_SCREENSAVER_IMAGE_URL) && (
+              <div className="absolute inset-0">
+                {KIOSK_SCREENSAVER_VIDEO_URL ? (
+                  <video
+                    className="h-full w-full object-cover"
+                    src={KIOSK_SCREENSAVER_VIDEO_URL}
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                  />
+                ) : (
+                  <img
+                    className="h-full w-full object-cover"
+                    src={KIOSK_SCREENSAVER_IMAGE_URL}
+                    alt=""
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-br from-blue-950/85 via-indigo-950/75 to-sky-900/85" />
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+          <div className="w-full max-w-6xl">
+            <div className={`rounded-[32px] border shadow-xl overflow-hidden bg-gradient-to-br ${
+              portaSensorFechada
+                ? 'from-emerald-50 via-white to-white border-emerald-100'
+                : portaSensorAberta
+                  ? 'from-amber-50 via-white to-white border-amber-100'
+                  : 'from-sky-50 via-white to-white border-sky-100'
+            }`}>
+              <div className="grid grid-cols-12 min-h-[420px]">
+                <div className="col-span-12 lg:col-span-7 p-7 flex flex-col">
+                  {!portaSensorFechada ? (
+                    <>
+                      <div className="flex items-start justify-between gap-6">
+                        <div className="min-w-0">
+                          <div className="text-xs font-extrabold tracking-[0.18em] text-slate-400">OPERAÇÃO DO TOTEM</div>
+                          <div className="mt-2 flex items-center gap-4">
+                            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shadow-lg">
+                              <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-lg font-extrabold tracking-tight text-slate-900">Porta selecionada</div>
+                              <div className="text-sm font-semibold text-slate-500">Depósito em andamento</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className={`shrink-0 px-4 py-2 rounded-2xl text-xs font-extrabold uppercase tracking-wide border ${
+                          portaSensorAberta
+                            ? 'bg-amber-50 text-amber-900 border-amber-200'
+                            : 'bg-sky-50 text-sky-800 border-sky-200'
+                        }`}>
+                          {portaSensorAberta ? 'Porta aberta' : 'Aguardando sensor'}
+                        </div>
+                      </div>
+
+                      <div className="mt-7 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
+                        <div className="text-2xl font-extrabold tracking-tight text-slate-900">
+                          Deposite a mercadoria no gaveteiro
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-slate-600">
+                          Após depositar, feche a porta. O sensor confirmará automaticamente.
+                        </div>
+
+                        {portaSensorAberta ? (
+                          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                            <div className="text-xs font-extrabold tracking-wide text-amber-900">AGUARDANDO FECHAMENTO</div>
+                            <div className="mt-1 text-sm font-semibold text-amber-900/90">Aguardando o sensor confirmar o fechamento…</div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm px-6 py-6">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
+                            <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                          </div>
+                          <div>
+                            <div className="text-xs font-extrabold tracking-[0.18em] text-emerald-700">PROCESSO CONCLUÍDO</div>
+                            <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Tudo finalizado com sucesso</div>
+                            <div className="text-sm font-semibold text-emerald-900/80">Guarde o comprovante (QRCode) para sua garantia.</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {portaSensorFechada ? (
+                    <div className="mt-7 rounded-3xl border border-slate-200 bg-white/85 shadow-sm p-6">
+                      <div className="text-sm font-extrabold tracking-tight text-slate-900">Confirmação do processo</div>
+                      <div className="mt-1 text-xs font-semibold text-slate-600">Tudo foi registrado e está pronto para comprovação.</div>
+
+                      <div className="mt-4 grid gap-3">
+                        <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                          <CheckCircle2 className="w-5 h-5 text-emerald-700 mt-0.5" />
+                          <div>
+                            <div className="text-sm font-extrabold text-emerald-950">Porta fechada confirmada</div>
+                            <div className="text-xs font-semibold text-emerald-900/80">Operação concluída com sucesso no totem.</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                          <CheckCircle2 className="w-5 h-5 text-slate-600 mt-0.5" />
+                          <div>
+                            <div className="text-sm font-extrabold text-slate-900">Comprovante disponível</div>
+                            <div className="text-xs font-semibold text-slate-600">Escaneie o QRCode à direita para visualizar os detalhes.</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3">
+                        <div className="text-xs font-extrabold tracking-wide text-sky-900">DICA</div>
+                        <div className="mt-1 text-xs font-semibold text-sky-900/80">Abra a câmera do celular e aponte para o QRCode. O comprovante abrirá automaticamente.</div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-auto pt-6">
+                    {!portaSensorFechada && mensagemConfirmarFechamento ? (
+                      <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+                        {mensagemConfirmarFechamento}
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
+                      <div className="flex flex-col gap-3">
+                        {portaSensorFechada ? (
+                          <button
+                            type="button"
+                            onClick={reiniciar}
+                            className="h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700"
+                          >
+                            <Package className="w-5 h-5" />
+                            Encerrar e voltar ao início
+                          </button>
+                        ) : (
+                          <div className="h-14 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 font-extrabold flex items-center justify-center gap-2">
+                            <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                            <span>Aguardando fechar</span>
+                            <span className="inline-flex w-6 justify-start">
+                              <span className="animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
+                              <span className="animate-pulse" style={{ animationDelay: '200ms' }}>.</span>
+                              <span className="animate-pulse" style={{ animationDelay: '400ms' }}>.</span>
+                            </span>
+                          </div>
+                        )}
+
+                        {!portaSensorFechada ? (
+                          <div className="grid grid-cols-2 gap-3">
+                            <button
+                              type="button"
+                              onClick={confirmarFechamentoManual}
+                              disabled={cancelandoOperacao || confirmandoFechamento}
+                              className="h-12 rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold flex items-center justify-center gap-2 shadow-lg hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-50"
+                            >
+                              <CheckCircle2 className={`w-5 h-5 ${confirmandoFechamento ? 'animate-pulse' : ''}`} />
+                              {confirmandoFechamento ? 'Confirmando...' : 'Confirmei o fechamento'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => cancelarOperacaoTotem('Cancelamento pelo entregador (Totem)')}
+                              disabled={cancelandoOperacao || confirmandoFechamento}
+                              className="h-12 rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                            >
+                              <RotateCcw className="w-5 h-5" />
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="h-12 flex items-center justify-center">
+                            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 text-emerald-900 border border-emerald-200 text-sm font-extrabold">
+                              <CheckCircle2 className="w-4 h-4" />
+                              Operação confirmada e finalizada
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-span-12 lg:col-span-5 bg-gradient-to-b from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-7 flex flex-col">
+                  {!portaSensorFechada ? (
+                    <div className="flex-1 flex flex-col">
+                      <div className="flex-1 rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center p-6">
+                        <img
+                          src="/3_delivery%20(1).gif"
+                          alt=""
+                          className="w-[360px] max-w-full h-auto max-h-[260px] object-contain"
+                          aria-hidden="true"
+                        />
+                      </div>
+
+                      {!portaSensorFechada && depositoDeadline ? (
+                        <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-5">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-extrabold tracking-wide text-slate-500">TEMPO PARA FECHAR</div>
+                            <div className="text-sm font-extrabold tabular-nums text-slate-900">{formatarTempo(depositoRestanteMs)}</div>
+                          </div>
+                          <div className="mt-3 h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-amber-500 to-rose-500 transition-[width]"
+                              style={{
+                                width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%`
+                              }}
+                            />
+                          </div>
+                          <div className="mt-2 text-[11px] font-semibold text-slate-500">
+                            Se não fechar em 1:30, a operação será cancelada automaticamente.
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col">
+                      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm p-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-extrabold tracking-wide text-emerald-700">SUCESSO</div>
+                            <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Entrega registrada com sucesso</div>
+                            <div className="mt-1 text-sm font-semibold text-emerald-900/90">Use o QRCode como comprovante do processo.</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={copiarComprovanteTotem}
+                            className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-2xl border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100/40 text-xs font-extrabold"
+                          >
+                            <Copy className="w-4 h-4" />
+                            Copiar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-6 flex items-center justify-center">
+                        <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                          <QRCode value={comprovanteUrl} size={220} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       ref={fullscreenTargetRef}
       data-etapa={etapa}
-      className={`${embeddedBleedClass} h-screen ${isKiosk ? (etapa === 'inicio' ? 'p-0' : 'p-4') : 'p-4'} flex flex-col overflow-x-hidden ${
+      className={`${embeddedBleedClass} h-screen ${isKiosk ? (etapa === 'inicio' || etapa === 'sucesso' ? 'p-0' : 'p-4') : 'p-4'} flex flex-col overflow-x-hidden ${
         isFullscreen || isKiosk ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900' : 'bg-slate-50'
       }`}
     >
@@ -1398,11 +1831,12 @@ useEffect(() => {
           </div>
         </div>
       ) : (
-          <div className="flex-1 min-h-0 flex flex-col">
-          {/* Header com título e passos na mesma linha */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 bg-white border border-slate-200 rounded-2xl p-3 sm:px-4 sm:py-3 shadow-sm">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="bg-sky-50 rounded-xl p-2 flex-shrink-0">
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex flex-col flex-1 min-h-0">
+              {/* Header com título e passos na mesma linha */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 bg-white border border-slate-200 rounded-2xl p-3 sm:px-4 sm:py-3 shadow-sm">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="bg-sky-50 rounded-xl p-2 flex-shrink-0">
                 {etapa === 'selecionar_bloco' ? (
                   <button
                     type="button"
@@ -1444,33 +1878,33 @@ useEffect(() => {
                 ) : (
                   <Package className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
                 )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 truncate">{headerSubtitle}</div>
-              </div>
-            </div>
-
-            {/* Passos visuais */}
-            <div className="flex items-center gap-1">
-              {isKiosk && (
-                <div className="mr-1 inline-flex items-center rounded-xl bg-slate-100 p-1">
-                  <button
-                    type="button"
-                    className="h-7 px-3 rounded-lg bg-white text-slate-900 shadow-sm border border-slate-200 text-xs font-extrabold"
-                    aria-current="page"
-                  >
-                    Entregar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/retirada?kiosk=1')}
-                    className="h-7 px-3 rounded-lg text-slate-600 hover:text-sky-700 hover:bg-white/60 text-xs font-extrabold transition-colors"
-                  >
-                    Retirar
-                  </button>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 truncate">{headerSubtitle}</div>
+                  </div>
                 </div>
-              )}
-              <button
+
+                {/* Passos visuais */}
+                <div className="flex items-center gap-1">
+                  {isKiosk && (
+                    <div className="mr-1 inline-flex items-center rounded-xl bg-slate-100 p-1">
+                      <button
+                        type="button"
+                        className="h-7 px-3 rounded-lg bg-white text-slate-900 shadow-sm border border-slate-200 text-xs font-extrabold"
+                        aria-current="page"
+                      >
+                        Entregar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/retirada?kiosk=1')}
+                        className="h-7 px-3 rounded-lg text-slate-600 hover:text-sky-700 hover:bg-white/60 text-xs font-extrabold transition-colors"
+                      >
+                        Retirar
+                      </button>
+                    </div>
+                  )}
+                <button
                 type="button"
                 onClick={() => setEtapa('selecionar_bloco')}
                 className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
@@ -2127,112 +2561,229 @@ useEffect(() => {
           </div>
         )}
 
-        {/* ETAPA: Confirmando */}
-        {etapa === 'confirmando' && (
-          <div className="p-6 flex flex-col items-center justify-center h-full">
-            <div className="w-full max-w-xl bg-gradient-to-b from-white to-sky-50 border border-sky-100 rounded-3xl shadow-sm p-8 text-center">
-              <div className="mx-auto w-20 h-20 rounded-3xl bg-sky-100/70 border border-sky-200 flex items-center justify-center mb-5 shadow-sm">
-                <Loader2 className="w-10 h-10 animate-spin text-sky-700" />
-              </div>
-
-              <p className="text-sm text-gray-500">Porta do gaveteiro</p>
-              <div className="mt-2 inline-flex items-center justify-center px-6 py-2 rounded-2xl bg-gradient-to-r from-sky-600 to-blue-600 text-white border border-sky-200 shadow-sm">
-                <span className="text-5xl font-extrabold tracking-tight">{portaSelecionadaAtualizada?.numero_porta ?? '-'}</span>
-              </div>
-
-              <h2 className="mt-6 text-3xl font-extrabold text-gray-900">Abrindo a porta do gaveteiro</h2>
-              <p className="mt-2 text-lg text-gray-700">Aguarde destravar para depositar.</p>
-
-              <div className="mt-6 flex items-center justify-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-sky-600" />
-                <span className="w-2 h-2 rounded-full bg-sky-300" />
-                <span className="w-2 h-2 rounded-full bg-sky-200" />
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ETAPA: Sucesso */}
         {etapa === 'sucesso' && (
           <div className="p-4 flex flex-col items-center justify-center flex-1 min-h-0">
-            <div className={`w-full max-w-xl border border-gray-200 rounded-3xl shadow-sm bg-gradient-to-b flex flex-col ${
-              portaSensorFechada
-                ? 'from-emerald-50 to-white'
-                : portaSensorAberta
-                  ? 'from-amber-50 to-white'
-                  : 'from-sky-50 to-white'
-            }`}>
-              <div className="p-5 sm:p-6">
-              <div className="text-center">
-                <p className="text-sm text-gray-500">Porta do gaveteiro</p>
-                <div className="mt-2 inline-flex items-center justify-center px-5 py-2 rounded-2xl bg-gradient-to-r from-sky-600 to-blue-600 text-white border border-sky-200 shadow-sm">
-                  <span className="text-4xl font-extrabold tracking-tight">{portaSelecionadaAtualizada?.numero_porta}</span>
-                </div>
+            <div className="w-full max-w-6xl">
+              <div className={`rounded-[32px] border shadow-xl overflow-hidden bg-gradient-to-br ${
+                portaSensorFechada
+                  ? 'from-emerald-50 via-white to-white border-emerald-100'
+                  : portaSensorAberta
+                    ? 'from-amber-50 via-white to-white border-amber-100'
+                    : 'from-sky-50 via-white to-white border-sky-100'
+              }`}>
+                <div className="grid grid-cols-12 min-h-[420px]">
+                  <div className="col-span-12 lg:col-span-7 p-7 flex flex-col">
+                    {!portaSensorFechada ? (
+                      <>
+                        <div className="flex items-start justify-between gap-6">
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold tracking-[0.18em] text-slate-400">OPERAÇÃO DO TOTEM</div>
+                            <div className="mt-2 flex items-center gap-4">
+                              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-sky-600 to-blue-700 text-white flex items-center justify-center shadow-lg">
+                                <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-lg font-extrabold tracking-tight text-slate-900">Porta selecionada</div>
+                                <div className="text-sm font-semibold text-slate-500">Depósito em andamento</div>
+                              </div>
+                            </div>
+                          </div>
 
-                <div className="mt-4 mx-auto max-w-md rounded-2xl border border-sky-100 bg-white/80 px-4 py-3 shadow-sm">
-                  <p className="text-lg font-extrabold text-gray-900 leading-snug">
-                    Deposite a mercadoria no gaveteiro.
-                  </p>
-                </div>
+                          <div className={`shrink-0 px-4 py-2 rounded-2xl text-xs font-extrabold uppercase tracking-wide border ${
+                            portaSensorAberta
+                              ? 'bg-amber-50 text-amber-900 border-amber-200'
+                              : 'bg-sky-50 text-sky-800 border-sky-200'
+                          }`}>
+                            {portaSensorAberta ? 'Porta aberta' : 'Aguardando sensor'}
+                          </div>
+                        </div>
 
-                {!portaSensorFechada && (
-                  <div className="mt-3">
-                    <img
-                      src="/3_delivery%20(1).gif"
-                      alt=""
-                      className="mx-auto w-[260px] max-w-full h-auto max-h-[200px] object-contain rounded-2xl"
-                      aria-hidden="true"
-                    />
+                        <div className="mt-7 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
+                          <div className="text-2xl font-extrabold tracking-tight text-slate-900">
+                            Deposite a mercadoria no gaveteiro
+                          </div>
+                          <div className="mt-2 text-sm font-semibold text-slate-600">
+                            Após depositar, feche a porta. O sensor confirmará automaticamente.
+                          </div>
+
+                          {portaSensorAberta ? (
+                            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                              <div className="text-xs font-extrabold tracking-wide text-amber-900">AGUARDANDO FECHAMENTO</div>
+                              <div className="mt-1 text-sm font-semibold text-amber-900/90">Aguardando o sensor confirmar o fechamento…</div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm px-6 py-6">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-4">
+                            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
+                              <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                            </div>
+                            <div>
+                              <div className="text-xs font-extrabold tracking-[0.18em] text-emerald-700">PROCESSO CONCLUÍDO</div>
+                              <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Tudo finalizado com sucesso</div>
+                              <div className="text-sm font-semibold text-emerald-900/80">Guarde o comprovante (QRCode) para sua garantia.</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {portaSensorFechada ? (
+                      <div className="mt-7 rounded-3xl border border-slate-200 bg-white/85 shadow-sm p-6">
+                        <div className="text-sm font-extrabold tracking-tight text-slate-900">Confirmação do processo</div>
+                        <div className="mt-1 text-xs font-semibold text-slate-600">Tudo foi registrado e está pronto para comprovação.</div>
+
+                        <div className="mt-4 grid gap-3">
+                          <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-700 mt-0.5" />
+                            <div>
+                              <div className="text-sm font-extrabold text-emerald-950">Porta fechada confirmada</div>
+                              <div className="text-xs font-semibold text-emerald-900/80">Operação concluída com sucesso no totem.</div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <CheckCircle2 className="w-5 h-5 text-slate-600 mt-0.5" />
+                            <div>
+                              <div className="text-sm font-extrabold text-slate-900">Comprovante disponível</div>
+                              <div className="text-xs font-semibold text-slate-600">Escaneie o QRCode à direita para visualizar os detalhes.</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3">
+                          <div className="text-xs font-extrabold tracking-wide text-sky-900">DICA</div>
+                          <div className="mt-1 text-xs font-semibold text-sky-900/80">Abra a câmera do celular e aponte para o QRCode. O comprovante abrirá automaticamente.</div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-auto pt-6">
+                      <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
+                        <div className="flex flex-col gap-3">
+                          {portaSensorFechada ? (
+                            <button
+                              type="button"
+                              onClick={reiniciar}
+                              className="h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700"
+                            >
+                              <Package className="w-5 h-5" />
+                              Encerrar e voltar ao início
+                            </button>
+                          ) : (
+                            <div className="h-14 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 font-extrabold flex items-center justify-center gap-2">
+                              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                              <span>Aguardando fechar</span>
+                              <span className="inline-flex w-6 justify-start">
+                                <span className="animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
+                                <span className="animate-pulse" style={{ animationDelay: '200ms' }}>.</span>
+                                <span className="animate-pulse" style={{ animationDelay: '400ms' }}>.</span>
+                              </span>
+                            </div>
+                          )}
+
+                          {!portaSensorFechada ? (
+                            <button
+                              type="button"
+                              onClick={() => cancelarOperacaoTotem('Cancelamento pelo entregador (Totem)')}
+                              disabled={cancelandoOperacao}
+                              className="h-12 rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                            >
+                              <RotateCcw className="w-5 h-5" />
+                              Cancelar
+                            </button>
+                          ) : (
+                            <div className="h-12 flex items-center justify-center">
+                              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 text-emerald-900 border border-emerald-200 text-sm font-extrabold">
+                                <CheckCircle2 className="w-4 h-4" />
+                                Operação confirmada e finalizada
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                )}
 
-                {!portaSensorFechada && (
-                  <p className="mt-2 text-sm font-semibold text-gray-700">
-                    {portaSensorAberta ? 'Aguardando o sensor confirmar o fechamento…' : null}
-                  </p>
-                )}
-              </div>
-              </div>
+                  <div className="col-span-12 lg:col-span-5 bg-gradient-to-b from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-7 flex flex-col">
+                    {!portaSensorFechada ? (
+                      <div className="flex-1 flex flex-col">
+                        <div className="flex-1 rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center p-6">
+                          <img
+                            src="/3_delivery%20(1).gif"
+                            alt=""
+                            className="w-[360px] max-w-full h-auto max-h-[260px] object-contain"
+                            aria-hidden="true"
+                          />
+                        </div>
 
-              <div className="p-5 sm:p-6 pt-0">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={reiniciar}
-                    className="w-full py-3 font-bold rounded-xl transition-all flex items-center justify-center gap-2 border border-red-200 bg-white text-red-600 hover:bg-red-50"
-                  >
-                    <RotateCcw className="w-5 h-5" />
-                    Cancelar operação
-                  </button>
+                        {!portaSensorFechada && depositoDeadline ? (
+                          <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-5">
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs font-extrabold tracking-wide text-slate-500">TEMPO PARA FECHAR</div>
+                              <div className="text-sm font-extrabold tabular-nums text-slate-900">{formatarTempo(depositoRestanteMs)}</div>
+                            </div>
+                            <div className="mt-3 h-3 w-full rounded-full bg-slate-100 overflow-hidden">
+                              <div
+                                className="h-full bg-gradient-to-r from-amber-500 to-rose-500 transition-[width]"
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%`
+                                }}
+                              />
+                            </div>
+                            <div className="mt-2 text-[11px] font-semibold text-slate-500">
+                              Se não fechar em 1:30, a operação será cancelada automaticamente.
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex flex-col">
+                        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm p-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-xs font-extrabold tracking-wide text-emerald-700">SUCESSO</div>
+                              <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Entrega registrada com sucesso</div>
+                              <div className="mt-1 text-sm font-semibold text-emerald-900/90">Use o QRCode como comprovante do processo.</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={copiarComprovanteTotem}
+                              className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-2xl border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100/40 text-xs font-extrabold"
+                            >
+                              <Copy className="w-4 h-4" />
+                              Copiar
+                            </button>
+                          </div>
+                        </div>
 
-                  <button
-                    onClick={reiniciar}
-                    className={`w-full py-3 font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${
-                      portaSensorFechada
-                        ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white hover:from-emerald-700 hover:to-green-700'
-                        : 'bg-gray-100 text-gray-300 cursor-not-allowed border border-gray-200'
-                    }`}
-                    disabled={!portaSensorFechada}
-                  >
-                    <Package className="w-5 h-5" />
-                    {portaSensorFechada ? 'Finalizar agora' : 'Aguardando Fechar'}
-                  </button>
+                        <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-6 flex items-center justify-center">
+                          <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                            <QRCode value={comprovanteUrl} size={220} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* ETAPA: Erro */}
         {etapa === 'erro' && (
           <div className="p-8 text-center">
             <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
               <XCircle className="w-10 h-10 text-red-600" />
             </div>
-            
+
             <h2 className="text-2xl font-bold text-red-600 mb-2">Erro</h2>
             <p className="text-gray-600 mb-6">{mensagemErro}</p>
-            
+
             <button
               onClick={reiniciar}
               className="px-8 py-4 bg-gray-800 text-white font-bold rounded-xl hover:bg-gray-900 transition-all"
@@ -2241,11 +2792,13 @@ useEffect(() => {
             </button>
           </div>
         )}
+
+        </div>
         </div>
         </div>
       </div>
-          </div>
-      )}
     </div>
-  )
+  )}
+  </div>
+)
 }

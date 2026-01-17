@@ -1,6 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { supabaseServer } from '../../../lib/server/supabase'
 
+const csvEscape = (value: any) => {
+  if (value === null || value === undefined) return ''
+  const s = String(value)
+  if (/[",\n\r;]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -8,8 +17,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const {
     condominioUid,
-    limit = '25',
-    page = '1',
     from,
     to,
     acao,
@@ -25,11 +32,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!condominioUid || typeof condominioUid !== 'string') {
     return res.status(400).json({ error: 'condominioUid é obrigatório' })
   }
-
-  const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 25))
-  const pageNum = Math.max(1, parseInt(String(page), 10) || 1)
-  const fromIdx = (pageNum - 1) * limitNum
-  const toIdx = fromIdx + limitNum - 1
 
   const applyBaseFilters = (q: any) => {
     q = q.eq('condominio_uid', condominioUid)
@@ -103,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         q = q.in('acao', ['OCUPAR', 'ocupar', 'ENTRADA', 'entrada', 'ocupado', 'OCUPADO'])
       } else if (upper === 'RETIRADA' || upper === 'SAIDA' || upper === 'SAÍDA') {
         q = q.in('acao', ['RETIRADA', 'retirada', 'SAIDA', 'saida', 'SAÍDA', 'saída'])
-      } else if (upper === 'CANCELAR' || upper === 'CANCELADO') {
+      } else if (upper === 'CANCELAR' || upper === 'CANCELADO' || upper === 'CANCELADO') {
         q = q.in('acao', ['CANCELAR', 'cancelar', 'CANCELADO', 'cancelado'])
       } else {
         q = q.eq('acao', a)
@@ -114,59 +116,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const base = applyFullFilters(
+    const q = applyFullFilters(
       supabaseServer
         .from('gvt_movimentacoes_porta')
         .select(
-          'uid, condominio_uid, condominio_nome, porta_uid, usuario_uid, senha_uid, acao, status_resultante, timestamp, origem, observacao, bloco, apartamento, compartilhada, numero_porta, destinatarios, destinatarios_resumo, cancelado, nome_morador, whatsapp_morador, email_morador, contatos_adicionais',
+          'uid, timestamp, numero_porta, acao, status_resultante, origem, bloco, apartamento, compartilhada, cancelado, observacao, nome_morador, whatsapp_morador, email_morador, condominio_nome',
           { count: 'exact' }
         )
     )
 
-    const { data, error, count } = await base
-      .order('timestamp', { ascending: false })
-      .range(fromIdx, toIdx)
-
+    const { data, error } = await q.order('timestamp', { ascending: false }).limit(10000)
     if (error) throw error
 
-    const resumoEntradas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['OCUPAR', 'ocupar', 'ENTRADA', 'entrada', 'ocupado', 'OCUPADO'])
+    const header = [
+      'timestamp',
+      'numero_porta',
+      'acao',
+      'status_resultante',
+      'origem',
+      'bloco',
+      'apartamento',
+      'compartilhada',
+      'cancelado',
+      'nome_morador',
+      'whatsapp_morador',
+      'email_morador',
+      'observacao'
+    ]
+
+    const rows = (data || []).map((m: any) =>
+      [
+        csvEscape(m.timestamp),
+        csvEscape(m.numero_porta),
+        csvEscape(m.acao),
+        csvEscape(m.status_resultante),
+        csvEscape(m.origem),
+        csvEscape(m.bloco),
+        csvEscape(m.apartamento),
+        csvEscape(m.compartilhada),
+        csvEscape(m.cancelado),
+        csvEscape(m.nome_morador),
+        csvEscape(m.whatsapp_morador),
+        csvEscape(m.email_morador),
+        csvEscape(m.observacao)
+      ].join(',')
     )
 
-    const resumoSaidas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['RETIRADA', 'retirada', 'SAIDA', 'saida', 'SAÍDA', 'saída'])
-    )
+    const csv = [header.join(','), ...rows].join('\n')
+    const fileName = `movimentos_${new Date().toISOString().slice(0, 10)}.csv`
 
-    const resumoCanceladas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['CANCELAR', 'cancelar', 'CANCELADO', 'cancelado'])
-    )
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
 
-    const [entradas, saidas, canceladas] = await Promise.all([resumoEntradas, resumoSaidas, resumoCanceladas])
-
-    return res.status(200).json({
-      items: data || [],
-      total: count || 0,
-      page: pageNum,
-      limit: limitNum,
-      resumo: {
-        entradas: entradas.count || 0,
-        saidas: saidas.count || 0,
-        canceladas: canceladas.count || 0
-      }
-    })
+    return res.status(200).send(csv)
   } catch (error: any) {
-    console.error('Erro ao listar movimentações:', error)
+    console.error('Erro ao exportar movimentações:', error)
     return res.status(500).json({
-      error: 'Erro ao buscar movimentações',
+      error: 'Erro ao exportar movimentações',
       details: error?.message || String(error)
     })
   }

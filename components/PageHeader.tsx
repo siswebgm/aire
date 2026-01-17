@@ -54,7 +54,7 @@ export function PageHeader({
               </div>
             </div>
 
-            {actions ? <div className="flex items-center gap-2 sm:gap-3">{actions}</div> : null}
+            {actions ? <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">{actions}</div> : null}
           </div>
         </div>
       </div>

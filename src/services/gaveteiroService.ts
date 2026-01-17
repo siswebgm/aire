@@ -218,6 +218,7 @@ export async function atualizarStatusPorta(
 // ============================================
 
 export interface SenhaDestinatario {
+  uid: string
   bloco: string
   apartamento: string
   senha: string
@@ -243,6 +244,7 @@ export async function criarSenhasProvisórias(
     senhasUsadas.add(senha)
     
     senhas.push({
+      uid: '',
       bloco: dest.bloco,
       apartamento: dest.apartamento,
       senha
@@ -250,7 +252,7 @@ export async function criarSenhasProvisórias(
   }
 
   // Inserir todas as senhas no banco
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from(TABLES.senhas_provisorias)
     .insert(
       senhas.map(s => ({
@@ -262,13 +264,20 @@ export async function criarSenhasProvisórias(
         status: 'ATIVA'
       }))
     )
+    .select('uid, bloco, apartamento, senha')
 
   if (error) {
     console.error('Erro ao criar senhas provisórias:', error)
     throw error
   }
 
-  return senhas
+  // Retornar com UID gerado pelo banco (ordem costuma ser preservada pelo Supabase)
+  return (data as any[] | null)?.map((row: any) => ({
+    uid: row.uid,
+    bloco: row.bloco,
+    apartamento: row.apartamento,
+    senha: row.senha
+  })) || senhas
 }
 
 // Buscar senhas ativas de uma porta
@@ -285,6 +294,7 @@ export async function buscarSenhasAtivas(portaUid: string): Promise<SenhaDestina
   }
 
   return (data || []).map(s => ({
+    uid: s.uid,
     bloco: s.bloco,
     apartamento: s.apartamento,
     senha: s.senha
@@ -320,14 +330,96 @@ export async function registrarMovimentacao(
   bloco?: string,
   apartamento?: string,
   compartilhada?: boolean,
-  destinatarios?: Destinatario[]
+  destinatarios?: Destinatario[],
+  senhaUid?: string
 ): Promise<void> {
+  // Preenche campos extras (snapshot) para facilitar relatórios
+  let condominioNome: string | null = null
+  let numeroPorta: number | null = null
+  let nomeMorador: string | null = null
+  let whatsappMorador: string | null = null
+  let emailMorador: string | null = null
+  let contatosAdicionaisMov: any = null
+
+  try {
+    if (condominioUid) {
+      const { data: condominioData } = await supabase
+        .from(TABLES.condominios)
+        .select('nome')
+        .eq('uid', condominioUid)
+        .maybeSingle()
+      condominioNome = condominioData?.nome ?? null
+    }
+
+    if (portaUid) {
+      const { data: portaData } = await supabase
+        .from(TABLES.portas)
+        .select('numero_porta')
+        .eq('uid', portaUid)
+        .maybeSingle()
+      numeroPorta = typeof portaData?.numero_porta === 'number' ? portaData.numero_porta : null
+    }
+
+    const buscarMorador = async (b: string, a: string) => {
+      if (condominioUid && b && a) {
+        const { data: moradorData } = await supabase
+          .from(TABLES.moradores)
+          .select('nome, whatsapp, email, contatos_adicionais')
+          .eq('condominio_uid', condominioUid)
+          .eq('bloco', b)
+          .eq('apartamento', a)
+          .eq('deletado', false)
+          .maybeSingle()
+        return moradorData
+      }
+    }
+
+    if (destinatarios && destinatarios.length > 0) {
+      if (destinatarios.length === 1) {
+        const d0 = destinatarios[0]
+        const morador = await buscarMorador(d0.bloco, d0.apartamento)
+        if (morador) {
+          nomeMorador = morador.nome ?? null
+          whatsappMorador = morador.whatsapp ?? null
+          emailMorador = morador.email ?? null
+          contatosAdicionaisMov = morador.contatos_adicionais ?? null
+        }
+      } else {
+        const resumo = []
+        for (const d of destinatarios) {
+          const morador = await buscarMorador(d.bloco, d.apartamento)
+          resumo.push({
+            bloco: d.bloco,
+            apartamento: d.apartamento,
+            nome: morador?.nome ?? null,
+            whatsapp: morador?.whatsapp ?? null,
+            contatos_adicionais: morador?.contatos_adicionais ?? []
+          })
+        }
+        contatosAdicionaisMov = resumo
+      }
+    } else if (bloco && apartamento && !String(bloco).includes(',') && !String(apartamento).includes(',')) {
+      const morador = await buscarMorador(String(bloco), String(apartamento))
+      if (morador) {
+        nomeMorador = morador.nome ?? null
+        whatsappMorador = morador.whatsapp ?? null
+        emailMorador = morador.email ?? null
+        contatosAdicionaisMov = morador.contatos_adicionais ?? null
+      }
+    }
+  } catch (e) {
+    // Falha ao preencher snapshot não deve impedir a movimentação
+    console.warn('[MOV] Falha ao preencher campos extras da movimentação:', e)
+  }
+
   const { error } = await supabase
     .from(TABLES.movimentacoes_porta)
     .insert({
       porta_uid: portaUid,
       condominio_uid: condominioUid,
+      condominio_nome: condominioNome,
       usuario_uid: usuarioUid,
+      senha_uid: senhaUid || null,
       acao,
       status_resultante: statusResultante,
       origem,
@@ -335,7 +427,13 @@ export async function registrarMovimentacao(
       bloco,
       apartamento,
       compartilhada: compartilhada || false,
-      destinatarios: destinatarios || null
+      destinatarios: destinatarios || null,
+      // Novas colunas (opcionais)
+      numero_porta: numeroPorta,
+      nome_morador: nomeMorador,
+      whatsapp_morador: whatsappMorador,
+      email_morador: emailMorador,
+      contatos_adicionais: contatosAdicionaisMov
     })
 
   if (error) {
@@ -354,6 +452,25 @@ export async function listarMovimentacoes(portaUid: string, limite: number = 50)
 
   if (error) {
     console.error('Erro ao listar movimentacoes:', error)
+    throw error
+  }
+
+  return data || []
+}
+
+export async function listarUltimasEntregas(
+  condominioUid: string,
+  limite: number = 20
+): Promise<MovimentacaoPorta[]> {
+  const { data, error } = await supabase
+    .from(TABLES.movimentacoes_porta)
+    .select('*')
+    .eq('condominio_uid', condominioUid)
+    .order('timestamp', { ascending: false })
+    .limit(limite)
+
+  if (error) {
+    console.error('Erro ao listar últimas entregas:', error)
     throw error
   }
 
@@ -384,8 +501,41 @@ export interface OcuparPortaResult {
   compartilhada: boolean
 }
 
+export async function ocuparPortaViaApi(params: OcuparPortaParams): Promise<{ sucesso: boolean; senhas: SenhaDestinatario[] }> {
+  const resp = await fetch('/api/portas/ocupar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+
+  const data = await resp.json().catch(() => null)
+  if (!resp.ok) {
+    const msg = data?.error || data?.message || 'Erro ao ocupar porta'
+    throw new Error(msg)
+  }
+
+  return data
+}
+
 export async function ocuparPorta(params: OcuparPortaParams): Promise<OcuparPortaResult> {
   const { portaUid, condominioUid, destinatarios, usuarioUid, observacao } = params
+
+  // Bloquear portas reservadas para portaria (não entram no fluxo de entregas)
+  const { data: portaCfg, error: portaCfgErr } = await supabase
+    .from(TABLES.portas)
+    .select('reservada_portaria')
+    .eq('uid', portaUid)
+    .eq('condominio_uid', condominioUid)
+    .single()
+
+  if (portaCfgErr) {
+    console.error('Erro ao validar configuração da porta:', portaCfgErr)
+    throw portaCfgErr
+  }
+
+  if ((portaCfg as any)?.reservada_portaria) {
+    throw new Error('Esta porta está reservada para a portaria e não pode ser utilizada para entregas.')
+  }
 
   // Validação: pelo menos um destinatário
   if (!destinatarios || destinatarios.length === 0) {
@@ -430,6 +580,9 @@ export async function ocuparPorta(params: OcuparPortaParams): Promise<OcuparPort
   )
   const senhas = await criarSenhasProvisórias(portaUid, condominioUid, destinatariosParaSenhas)
 
+  // Se houver exatamente 1 senha gerada, podemos referenciar na movimentação
+  const senhaUidMov = senhas.length === 1 ? senhas[0].uid : undefined
+
   // 3. Registrar movimentação (com destinatarios em JSON, incluindo quantidade)
   await registrarMovimentacao(
     portaUid,
@@ -442,7 +595,8 @@ export async function ocuparPorta(params: OcuparPortaParams): Promise<OcuparPort
     blocos,
     apartamentos,
     compartilhada,
-    destinatariosValidos // JSON com array de {bloco, apartamento, quantidade}
+    destinatariosValidos, // JSON com array de {bloco, apartamento, quantidade}
+    senhaUidMov
   )
 
   // 4. Log
@@ -588,7 +742,12 @@ export async function liberarPortaComSenha(
     'OCUPADO', // Ainda ocupado até todas as senhas serem usadas
     usuarioUid,
     'WEB',
-    `Retirada: ${resultadoSenha.bloco} - Apto ${resultadoSenha.apartamento}`
+    `Retirada: ${resultadoSenha.bloco} - Apto ${resultadoSenha.apartamento}`,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    resultadoSenha.senhaUid
   )
 
   // 5. Verificar se todas as senhas foram usadas

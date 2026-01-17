@@ -1,6 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { supabaseServer } from '../../../lib/server/supabase'
 
+const htmlEscape = (value: any) => {
+  if (value === null || value === undefined) return ''
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -8,8 +18,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const {
     condominioUid,
-    limit = '25',
-    page = '1',
     from,
     to,
     acao,
@@ -25,11 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!condominioUid || typeof condominioUid !== 'string') {
     return res.status(400).json({ error: 'condominioUid é obrigatório' })
   }
-
-  const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 25))
-  const pageNum = Math.max(1, parseInt(String(page), 10) || 1)
-  const fromIdx = (pageNum - 1) * limitNum
-  const toIdx = fromIdx + limitNum - 1
 
   const applyBaseFilters = (q: any) => {
     q = q.eq('condominio_uid', condominioUid)
@@ -103,7 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         q = q.in('acao', ['OCUPAR', 'ocupar', 'ENTRADA', 'entrada', 'ocupado', 'OCUPADO'])
       } else if (upper === 'RETIRADA' || upper === 'SAIDA' || upper === 'SAÍDA') {
         q = q.in('acao', ['RETIRADA', 'retirada', 'SAIDA', 'saida', 'SAÍDA', 'saída'])
-      } else if (upper === 'CANCELAR' || upper === 'CANCELADO') {
+      } else if (upper === 'CANCELAR' || upper === 'CANCELADO' || upper === 'CANCELADO') {
         q = q.in('acao', ['CANCELAR', 'cancelar', 'CANCELADO', 'cancelado'])
       } else {
         q = q.eq('acao', a)
@@ -114,59 +117,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const base = applyFullFilters(
+    const q = applyFullFilters(
       supabaseServer
         .from('gvt_movimentacoes_porta')
         .select(
-          'uid, condominio_uid, condominio_nome, porta_uid, usuario_uid, senha_uid, acao, status_resultante, timestamp, origem, observacao, bloco, apartamento, compartilhada, numero_porta, destinatarios, destinatarios_resumo, cancelado, nome_morador, whatsapp_morador, email_morador, contatos_adicionais',
+          'uid, timestamp, numero_porta, acao, status_resultante, origem, bloco, apartamento, compartilhada, cancelado, observacao, nome_morador, whatsapp_morador, email_morador',
           { count: 'exact' }
         )
     )
 
-    const { data, error, count } = await base
-      .order('timestamp', { ascending: false })
-      .range(fromIdx, toIdx)
-
+    const { data, error } = await q.order('timestamp', { ascending: false }).limit(10000)
     if (error) throw error
 
-    const resumoEntradas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['OCUPAR', 'ocupar', 'ENTRADA', 'entrada', 'ocupado', 'OCUPADO'])
-    )
+    const rows = (data || [])
+      .map((m: any) => {
+        return `<tr>` +
+          `<td>${htmlEscape(m.timestamp)}</td>` +
+          `<td>${htmlEscape(m.numero_porta)}</td>` +
+          `<td>${htmlEscape(m.acao)}</td>` +
+          `<td>${htmlEscape(m.status_resultante)}</td>` +
+          `<td>${htmlEscape(m.origem)}</td>` +
+          `<td>${htmlEscape(m.bloco)}</td>` +
+          `<td>${htmlEscape(m.apartamento)}</td>` +
+          `<td>${htmlEscape(m.compartilhada)}</td>` +
+          `<td>${htmlEscape(m.cancelado)}</td>` +
+          `<td>${htmlEscape(m.nome_morador)}</td>` +
+          `<td>${htmlEscape(m.whatsapp_morador)}</td>` +
+          `<td>${htmlEscape(m.email_morador)}</td>` +
+          `<td>${htmlEscape(m.observacao)}</td>` +
+          `</tr>`
+      })
+      .join('')
 
-    const resumoSaidas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['RETIRADA', 'retirada', 'SAIDA', 'saida', 'SAÍDA', 'saída'])
-    )
+    const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body>` +
+      `<table border="1">` +
+      `<thead><tr>` +
+      `<th>timestamp</th><th>numero_porta</th><th>acao</th><th>status_resultante</th><th>origem</th><th>bloco</th><th>apartamento</th><th>compartilhada</th><th>cancelado</th><th>nome_morador</th><th>whatsapp_morador</th><th>email_morador</th><th>observacao</th>` +
+      `</tr></thead>` +
+      `<tbody>${rows}</tbody>` +
+      `</table>` +
+      `</body></html>`
 
-    const resumoCanceladas = applyBaseFilters(
-      supabaseServer
-        .from('gvt_movimentacoes_porta')
-        .select('uid', { count: 'exact', head: true })
-        .in('acao', ['CANCELAR', 'cancelar', 'CANCELADO', 'cancelado'])
-    )
+    const fileName = `movimentos_${new Date().toISOString().slice(0, 10)}.xls`
 
-    const [entradas, saidas, canceladas] = await Promise.all([resumoEntradas, resumoSaidas, resumoCanceladas])
+    res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
 
-    return res.status(200).json({
-      items: data || [],
-      total: count || 0,
-      page: pageNum,
-      limit: limitNum,
-      resumo: {
-        entradas: entradas.count || 0,
-        saidas: saidas.count || 0,
-        canceladas: canceladas.count || 0
-      }
-    })
+    return res.status(200).send(html)
   } catch (error: any) {
-    console.error('Erro ao listar movimentações:', error)
+    console.error('Erro ao exportar movimentações (excel):', error)
     return res.status(500).json({
-      error: 'Erro ao buscar movimentações',
+      error: 'Erro ao exportar movimentações',
       details: error?.message || String(error)
     })
   }

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
-import { Download, RefreshCw } from 'lucide-react'
+import { MoreVertical, RefreshCw, ShieldCheck, ShieldOff, AlertTriangle, DoorOpen } from 'lucide-react'
 import type { Porta } from 'src/types/gaveteiro'
 import { ocuparPorta, liberarPortaComSenha, cancelarOcupacao, darBaixaPorta, liberarPorta, atualizarStatusPorta, registrarMovimentacao, type Destinatario } from 'src/services/gaveteiroService'
 import { useAuth } from 'src/contexts/AuthContext'
@@ -23,12 +23,17 @@ export default function DetalhesPorta() {
   const [porta, setPorta] = useState<PortaDetalhada | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingAcao, setLoadingAcao] = useState(false)
+  const [salvandoConfigPortaria, setSalvandoConfigPortaria] = useState(false)
+  const [abrindoPortaPortaria, setAbrindoPortaPortaria] = useState(false)
   const [agora, setAgora] = useState<Date>(() => new Date())
   const [senhaLiberacao, setSenhaLiberacao] = useState('')
   const [destinatarios, setDestinatarios] = useState<Destinatario[]>([{ bloco: '', apartamento: '' }])
   const [showOcuparForm, setShowOcuparForm] = useState(false)
   const [aviso, setAviso] = useState<{ titulo: string; mensagem: string } | null>(null)
   const [confirmarCancelarAberto, setConfirmarCancelarAberto] = useState(false)
+  const [menuAcoesAberto, setMenuAcoesAberto] = useState(false)
+  const menuAcoesRef = useRef<HTMLDivElement | null>(null)
+  const senhaLiberacaoInputRef = useRef<HTMLInputElement | null>(null)
 
   const blocosEApartamentosAtuais = (() => {
     const blocoStr = porta?.bloco_atual
@@ -65,6 +70,28 @@ export default function DetalhesPorta() {
     const t = setInterval(() => setAgora(new Date()), 30_000)
     return () => clearInterval(t)
   }, [porta?.ocupado_em, porta?.status_atual])
+
+  useEffect(() => {
+    if (!menuAcoesAberto) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuAcoesAberto(false)
+    }
+
+    const onPointerDown = (e: MouseEvent | PointerEvent) => {
+      const el = menuAcoesRef.current
+      if (!el) return
+      if (el.contains(e.target as Node)) return
+      setMenuAcoesAberto(false)
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [menuAcoesAberto])
 
   const formatarTempoOcupacao = (ocupadoEm: string | null | undefined) => {
     if (!ocupadoEm) return '—'
@@ -136,6 +163,77 @@ export default function DetalhesPorta() {
       router.push('/')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const toggleReservadaPortaria = async (nextValue: boolean) => {
+    if (!porta || !condominio?.uid) return
+    if (salvandoConfigPortaria) return
+
+    if (porta.status_atual !== 'DISPONIVEL') {
+      mostrarAviso('Para reservar a porta para portaria, ela precisa estar DISPONÍVEL (não ocupada).')
+      return
+    }
+
+    setSalvandoConfigPortaria(true)
+    try {
+      const { error } = await supabase
+        .from('gvt_portas')
+        .update({ reservada_portaria: nextValue })
+        .eq('uid', porta.uid)
+        .eq('condominio_uid', condominio.uid)
+
+      if (error) throw error
+      await carregarPorta()
+      mostrarAviso(nextValue ? 'Porta reservada para portaria.' : 'Porta voltou ao uso normal.')
+    } catch (e: any) {
+      console.error('Erro ao atualizar reservada_portaria:', e)
+      mostrarAviso(e?.message || 'Erro ao salvar configuração')
+    } finally {
+      setSalvandoConfigPortaria(false)
+    }
+  }
+
+  const abrirPortaPortariaAgora = async () => {
+    if (!porta || !condominio?.uid) return
+    if (!porta.reservada_portaria) return
+    if (abrindoPortaPortaria) return
+
+    setAbrindoPortaPortaria(true)
+    try {
+      const TIMEOUT_MS = 15_000
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
+
+      let response: Response
+      try {
+        response = await fetch('/api/proxy/abrir-porta-individual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio.uid,
+            portaUid: porta.uid,
+            porta: porta.numero_porta
+          }),
+          signal: controller.signal
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
+
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Não foi possível abrir a porta')
+      }
+
+      mostrarAviso('Comando enviado. A porta deve abrir agora.', 'Portaria')
+    } catch (e: any) {
+      const msg = e?.name === 'AbortError'
+        ? 'Tempo esgotado ao tentar abrir a porta.'
+        : (e?.message || 'Erro ao abrir a porta')
+      mostrarAviso(msg)
+    } finally {
+      setAbrindoPortaPortaria(false)
     }
   }
 
@@ -443,21 +541,30 @@ export default function DetalhesPorta() {
 
         {aviso ? (
           <div className="fixed top-4 right-4 z-[9999] w-[calc(100vw-2rem)] max-w-sm pointer-events-none">
-            <div className="bg-white/95 backdrop-blur rounded-2xl shadow-2xl border border-slate-200 p-4 pointer-events-auto">
+            <div className="bg-emerald-600/95 backdrop-blur rounded-2xl shadow-2xl border border-emerald-500/40 p-4 pointer-events-auto">
               <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-extrabold text-slate-900">{aviso.titulo}</div>
-                  <div className="mt-1 text-sm text-slate-600 break-words">{aviso.mensagem}</div>
+                <div className="min-w-0 flex items-start gap-3">
+                  <div className="mt-0.5">
+                    <ShieldCheck className="w-5 h-5 text-white/95" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-extrabold text-white/95 uppercase tracking-wide">{aviso.titulo}</div>
+                    <div className="mt-1 text-sm font-semibold text-white break-words">{aviso.mensagem}</div>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setAviso(null)}
-                  className="h-8 w-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-extrabold flex items-center justify-center"
+                  className="h-8 w-8 rounded-xl bg-white/15 hover:bg-white/25 text-white text-sm font-extrabold flex items-center justify-center"
                   aria-label="Fechar aviso"
                   title="Fechar"
                 >
                   ×
                 </button>
+              </div>
+
+              <div className="mt-3 h-1 w-full bg-white/20 rounded-full overflow-hidden">
+                <div className="h-full w-2/3 bg-white/70 rounded-full" />
               </div>
             </div>
           </div>
@@ -497,6 +604,18 @@ export default function DetalhesPorta() {
                     )}
                   </div>
                 </div>
+
+                <div className="mt-3 pt-3 border-t border-slate-200">
+                  <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Data de Ocupação</div>
+                  {porta.ocupado_em ? (
+                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm font-extrabold text-slate-900">
+                      <span>{new Date(porta.ocupado_em).toLocaleDateString('pt-BR')}</span>
+                      <span className="text-slate-700">{new Date(porta.ocupado_em).toLocaleTimeString('pt-BR')}</span>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-sm font-extrabold text-slate-900">N/A</div>
+                  )}
+                </div>
               </div>
 
               <div className="mt-5 flex items-center justify-end gap-2">
@@ -529,15 +648,6 @@ export default function DetalhesPorta() {
             sticky={false}
             actions={
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={baixarPDF}
-                  className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
-                  title="Baixar PDF"
-                  aria-label="Baixar PDF"
-                >
-                  <Download size={18} />
-                </button>
                 <div
                   className={`px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2 ${
                     porta.status_atual === 'DISPONIVEL' ? 'status-badge-available' : 'status-badge-occupied'
@@ -545,6 +655,68 @@ export default function DetalhesPorta() {
                 >
                   <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
                   {porta.status_atual === 'DISPONIVEL' ? 'Disponível' : 'Ocupada'}
+                </div>
+
+                <div ref={menuAcoesRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setMenuAcoesAberto((v) => !v)}
+                    className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                    aria-label="Mais ações"
+                    aria-haspopup="menu"
+                    aria-expanded={menuAcoesAberto}
+                    title="Mais ações"
+                  >
+                    <MoreVertical size={18} />
+                  </button>
+
+                  {menuAcoesAberto ? (
+                    <div
+                      role="menu"
+                      className="absolute right-0 mt-2 w-44 rounded-2xl bg-white shadow-2xl border border-slate-200 p-1 z-50"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuAcoesAberto(false)
+                          baixarPDF()
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        Baixar
+                      </button>
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={porta.status_atual !== 'OCUPADO'}
+                        onClick={() => {
+                          setMenuAcoesAberto(false)
+                          setConfirmarCancelarAberto(true)
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        Cancelar
+                      </button>
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={porta.status_atual !== 'OCUPADO'}
+                        onClick={() => {
+                          setMenuAcoesAberto(false)
+                          setTimeout(() => {
+                            senhaLiberacaoInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                            senhaLiberacaoInputRef.current?.focus()
+                          }, 50)
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        Liberar
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             }
@@ -596,6 +768,111 @@ export default function DetalhesPorta() {
                   </span>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="glass-card rounded-2xl overflow-hidden">
+            <div className="px-6 py-5 border-b border-gray-100 bg-white">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-extrabold text-slate-900">Portaria</h2>
+                  <p className="text-sm text-slate-500">Reservar esta porta para uso interno (sem registro de mercadorias)</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => toggleReservadaPortaria(!porta.reservada_portaria)}
+                  disabled={salvandoConfigPortaria || porta.status_atual !== 'DISPONIVEL'}
+                  className={
+                    `relative w-12 h-7 rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ` +
+                    (porta.reservada_portaria ? 'bg-emerald-600 border-emerald-600' : 'bg-white border-slate-300')
+                  }
+                  aria-label="Alternar modo portaria"
+                  title="Alternar modo portaria"
+                >
+                  <span
+                    className={
+                      `absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow-md transition-transform ` +
+                      (porta.reservada_portaria ? 'translate-x-5' : 'translate-x-0')
+                    }
+                  />
+                  {salvandoConfigPortaria ? (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <RefreshCw size={16} className="animate-spin text-white" />
+                    </span>
+                  ) : null}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div
+                className={
+                  `rounded-2xl border p-5 ` +
+                  (porta.reservada_portaria
+                    ? 'border-emerald-200 bg-emerald-50'
+                    : 'border-slate-200 bg-slate-50')
+                }
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {porta.reservada_portaria ? (
+                        <ShieldCheck className="w-5 h-5 text-emerald-700" />
+                      ) : (
+                        <ShieldOff className="w-5 h-5 text-slate-600" />
+                      )}
+                      <div className="text-base font-extrabold text-slate-900">
+                        {porta.reservada_portaria ? 'MODO PORTARIA ATIVO' : 'MODO PORTARIA INATIVO'}
+                      </div>
+                      <span
+                        className={
+                          `ml-1 inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold border ` +
+                          (porta.reservada_portaria
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white text-slate-700 border-slate-200')
+                        }
+                      >
+                        {porta.reservada_portaria ? 'ATIVA' : 'INATIVA'}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 text-sm font-semibold text-slate-700">
+                      Ao ativar, esta porta <span className="font-extrabold">não será usada em entregas</span>.
+                      Use para guardar itens internos e abra quando precisar.
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-700 mt-0.5" />
+                        <div className="text-xs font-semibold text-amber-900">
+                          Esta opção só pode ser alterada quando a porta estiver <span className="font-extrabold">DISPONÍVEL</span>.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {porta.reservada_portaria ? (
+                    <button
+                      type="button"
+                      onClick={abrirPortaPortariaAgora}
+                      disabled={abrindoPortaPortaria}
+                      className="shrink-0 inline-flex items-center gap-2 h-9 px-3 rounded-xl border border-slate-200 bg-white text-slate-900 text-xs font-extrabold hover:bg-slate-50 disabled:opacity-50"
+                      title="Abrir porta"
+                    >
+                      {abrindoPortaPortaria ? (
+                        <RefreshCw size={14} className="animate-spin" />
+                      ) : (
+                        <DoorOpen size={14} />
+                      )}
+                      Abrir
+                    </button>
+                  ) : (
+                    <div className="w-12" />
+                  )}
+                </div>
+              </div>
+
             </div>
           </div>
 
@@ -711,6 +988,7 @@ export default function DetalhesPorta() {
                       <h3 className="text-sm font-bold text-gray-700 mb-3">Liberar Porta</h3>
                       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                         <input
+                          ref={senhaLiberacaoInputRef}
                           type="password"
                           placeholder="Senha de liberação"
                           value={senhaLiberacao}

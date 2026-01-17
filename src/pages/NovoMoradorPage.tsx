@@ -56,12 +56,12 @@ const formVazio = {
 
 export default function NovoMoradorPage() {
   const router = useRouter()
-  const { uid } = useParams()
+  const uid = typeof router.query.uid === 'string' ? router.query.uid : undefined
   const { condominio } = useAuth()
   
   const [form, setForm] = useState(formVazio)
   const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(!!uid)
+  const [loading, setLoading] = useState(Boolean(uid))
   const [error, setError] = useState('')
 
   const [blocos, setBlocos] = useState<Bloco[]>([])
@@ -70,7 +70,7 @@ export default function NovoMoradorPage() {
   const [loadingBlocos, setLoadingBlocos] = useState(false)
   const [loadingApartamentos, setLoadingApartamentos] = useState(false)
   
-  const isEditing = !!uid
+  const isEditing = Boolean(uid)
 
   useEffect(() => {
     if (uid && condominio?.uid) {
@@ -192,12 +192,12 @@ export default function NovoMoradorPage() {
       const dadosMorador = {
         condominio_uid: condominio.uid,
         nome: form.nome.trim(),
-        whatsapp: onlyDigits(form.whatsapp).trim() || null,
-        bloco: blocoUidSelecionado ? (blocoSelecionado?.nome || null) : null,
+        whatsapp: onlyDigits(form.whatsapp).trim() || undefined,
+        bloco: blocoUidSelecionado ? (blocoSelecionado?.nome || undefined) : undefined,
         apartamento: form.apartamento.trim(),
         tipo: form.tipo,
         contatos_adicionais: form.contatos_adicionais,
-        observacao: form.observacao.trim() || null,
+        observacao: form.observacao.trim() || undefined,
         ativo: true
       }
 

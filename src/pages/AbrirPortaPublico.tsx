@@ -185,7 +185,8 @@ export default function AbrirPortaPublico() {
 
     if (statusFacial !== 'camera_pronta') {
       await startCamera()
-      if (statusFacial !== 'camera_pronta') return
+      // startCamera atualiza statusFacial via setState; não depende do valor atual aqui.
+      // Se a câmera não estiver disponível, startCamera já setará erro/mensagem.
     }
 
     setStatusFacial('reconhecendo')
@@ -223,7 +224,8 @@ export default function AbrirPortaPublico() {
         `)
         .eq('senha', senha)
         .eq('status', 'ATIVA')
-        .single()
+        .limit(1)
+        .maybeSingle()
 
       if (senhaError || !senhaData) {
         // Tentar senha mestre
@@ -314,7 +316,7 @@ export default function AbrirPortaPublico() {
         await supabase
           .from('gvt_senhas_provisorias')
           .update({
-            status: 'CANCELADA',
+            status: 'USADA',
             usada_em: new Date().toISOString()
           })
           .eq('uid', senhaData.uid)
@@ -324,8 +326,10 @@ export default function AbrirPortaPublico() {
           .from('gvt_movimentacoes_porta')
           .insert({
             condominio_uid: gaveteiro?.condominio_uid || condominio?.uid,
+            condominio_nome: condominio?.nome || null,
             porta_uid: senhaData.porta_uid,
-            acao: 'CANCELAR',
+            senha_uid: senhaData.uid,
+            acao: 'RETIRADA',
             status_resultante: 'OCUPADO',
             timestamp: new Date().toISOString(),
             origem: 'TOTEM',

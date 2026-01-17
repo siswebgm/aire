@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
-import { Building2, Home, Loader2, Mail, Phone, Plus, Save, Users } from 'lucide-react'
+import { Building2, Camera, Home, Loader2, Mail, Phone, Plus, Save, Users, UserPlus, X } from 'lucide-react'
 import { useAuth } from '../../src/contexts/AuthContext'
 import type { Apartamento, Bloco, Morador, TipoMorador } from '../../src/types/gaveteiro'
 import { atualizarMorador, listarApartamentos, listarBlocos, listarMoradores } from '../../src/services/gaveteiroService'
+import { supabase } from '../../src/lib/supabaseClient'
 import { MainLayout } from '../../components/MainLayout'
 import { PageHeader } from '../../components/PageHeader'
 
@@ -83,6 +84,18 @@ export default function MoradorDetalhesPage() {
     Array<{ nome: string; whatsapp: string; email: string }>
   >([])
   const [observacao, setObservacao] = useState('')
+
+  const [facialUrl, setFacialUrl] = useState<string>('')
+  const [facialFile, setFacialFile] = useState<File | null>(null)
+  const [facialPreviewUrl, setFacialPreviewUrl] = useState<string>('')
+  const [facialQuality, setFacialQuality] = useState<{ ok: boolean; message: string } | null>(null)
+  const [facialRemovida, setFacialRemovida] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraError, setCameraError] = useState<string>('')
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
   const blocoSelecionado = useMemo(() => {
     if (!blocoUid) return null
@@ -168,6 +181,11 @@ export default function MoradorDetalhesPage() {
       setNome(m.nome || '')
       setEmail(m.email || '')
       setWhatsapp(m.whatsapp || '')
+      setFacialUrl(String((m as any).facial_url || ''))
+      setFacialFile(null)
+      setFacialPreviewUrl('')
+      setFacialQuality(null)
+      setFacialRemovida(false)
       setApartamentoNumero(m.apartamento || '')
       setTipo(m.tipo)
       setContatosAdicionais(normalizeContatosAdicionais((m as any).contatos_adicionais))
@@ -196,6 +214,205 @@ export default function MoradorDetalhesPage() {
       return (temContato && !temNome) || (temNome && !temContato)
     })
   }, [contatosAdicionais])
+
+  const validarFotoFacial = async (file: File): Promise<{ ok: boolean; message: string }> => {
+    const maxBytes = 5 * 1024 * 1024
+    if (file.size > maxBytes) {
+      return { ok: false, message: 'Arquivo muito grande. Envie uma foto de até 5MB.' }
+    }
+
+    const url = URL.createObjectURL(file)
+    try {
+      const img = new Image()
+      img.decoding = 'async'
+
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('Falha ao ler imagem'))
+        img.src = url
+      })
+
+      const w = img.naturalWidth || img.width
+      const h = img.naturalHeight || img.height
+
+      if (w < 320 || h < 320) {
+        return { ok: false, message: 'Foto pequena. Use uma imagem com pelo menos 320x320.' }
+      }
+
+      const canvas = document.createElement('canvas')
+      const target = 256
+      canvas.width = target
+      canvas.height = target
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      if (!ctx) return { ok: true, message: 'Foto adicionada.' }
+
+      ctx.drawImage(img, 0, 0, target, target)
+      const { data } = ctx.getImageData(0, 0, target, target)
+
+      let sum = 0
+      const n = target * target
+      const gray = new Float32Array(n)
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const r = data[i]
+        const g = data[i + 1]
+        const b = data[i + 2]
+        const y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        gray[p] = y
+        sum += y
+      }
+      const mean = sum / n
+
+      let lapSum = 0
+      let lapSum2 = 0
+      const idx = (x: number, y: number) => y * target + x
+      for (let y = 1; y < target - 1; y++) {
+        for (let x = 1; x < target - 1; x++) {
+          const c = gray[idx(x, y)]
+          const up = gray[idx(x, y - 1)]
+          const down = gray[idx(x, y + 1)]
+          const left = gray[idx(x - 1, y)]
+          const right = gray[idx(x + 1, y)]
+          const lap = up + down + left + right - 4 * c
+          lapSum += lap
+          lapSum2 += lap * lap
+        }
+      }
+      const count = (target - 2) * (target - 2)
+      const lapMean = lapSum / count
+      const lapVar = lapSum2 / count - lapMean * lapMean
+
+      if (mean < 60) {
+        return { ok: false, message: 'Foto muito escura. Aumente a iluminação do rosto.' }
+      }
+      if (mean > 210) {
+        return { ok: false, message: 'Foto muito clara/estourada. Evite contraluz ou flash.' }
+      }
+      if (lapVar < 35) {
+        return { ok: false, message: 'Foto com pouco foco (borrada). Tire outra mais nítida.' }
+      }
+
+      return { ok: true, message: 'Boa foto: nítida e bem iluminada.' }
+    } catch {
+      return { ok: true, message: 'Foto adicionada.' }
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  const handleSelecionarFacial = async (file: File | null) => {
+    setError('')
+    if (!file) {
+      setFacialFile(null)
+      setFacialQuality(null)
+      setFacialPreviewUrl('')
+      return
+    }
+
+    const q = await validarFotoFacial(file)
+    setFacialQuality(q)
+    if (!q.ok) {
+      setFacialFile(null)
+      setFacialPreviewUrl('')
+      return
+    }
+
+    setFacialRemovida(false)
+    setFacialFile(file)
+  }
+
+  useEffect(() => {
+    if (!facialFile) {
+      if (facialPreviewUrl) {
+        try {
+          URL.revokeObjectURL(facialPreviewUrl)
+        } catch {
+          // ignore
+        }
+      }
+      setFacialPreviewUrl('')
+      return
+    }
+
+    const url = URL.createObjectURL(facialFile)
+    setFacialPreviewUrl(url)
+    return () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {
+        // ignore
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facialFile])
+
+  const pararCamera = () => {
+    try {
+      streamRef.current?.getTracks()?.forEach((t) => t.stop())
+    } catch {
+      // ignore
+    }
+    streamRef.current = null
+    if (videoRef.current) {
+      try {
+        ;(videoRef.current as any).srcObject = null
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const abrirCamera = async () => {
+    setCameraError('')
+    setCameraOpen(true)
+    await new Promise((r) => setTimeout(r, 0))
+
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('Câmera não suportada neste dispositivo/navegador.')
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user' },
+        audio: false
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        ;(videoRef.current as any).srcObject = stream
+        await videoRef.current.play().catch(() => null)
+      }
+    } catch (e: any) {
+      setCameraError(e?.message || 'Não foi possível acessar a câmera')
+    }
+  }
+
+  const capturarFoto = async () => {
+    if (!videoRef.current) return
+    const video = videoRef.current
+    const w = video.videoWidth || 640
+    const h = video.videoHeight || 480
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, w, h)
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9))
+    if (!blob) return
+
+    const file = new File([blob], `facial-${Date.now()}.jpg`, { type: 'image/jpeg' })
+    await handleSelecionarFacial(file)
+    setCameraOpen(false)
+    pararCamera()
+  }
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      pararCamera()
+      setCameraError('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraOpen])
 
   const salvar = async () => {
     if (!condominio?.uid || !morador?.uid) return
@@ -228,10 +445,39 @@ export default function MoradorDetalhesPage() {
 
     setSaving(true)
     try {
+      const bucket = String((condominio as any)?.storage || '').trim()
+
+      const precisaBucket = !!facialFile
+      if (precisaBucket && !bucket) {
+        throw new Error('Condomínio sem bucket de storage configurado (condominio.storage).')
+      }
+
+      let nextFacialUrl: string | null | undefined = facialRemovida ? null : facialUrl || null
+
+      if (facialFile) {
+        const ext = (facialFile.name.split('.').pop() || 'jpg').toLowerCase()
+        const safeExt = ext.replace(/[^a-z0-9]/g, '') || 'jpg'
+        const fileId =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+        const filePath = `${condominio.uid}/moradores/${morador.uid}/${fileId}.${safeExt}`
+        const { error: uploadError } = await supabase.storage.from(bucket).upload(filePath, facialFile, {
+          upsert: true,
+          contentType: facialFile.type || 'image/jpeg'
+        })
+        if (uploadError) throw uploadError
+
+        const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(filePath)
+        nextFacialUrl = publicData?.publicUrl || null
+      }
+
       const atualizado = await atualizarMorador(morador.uid, {
         nome: formatNomePtBr(nome),
         email: email.trim().toLowerCase() || null,
         whatsapp: onlyDigits(whatsapp).trim() || null,
+        facial_url: nextFacialUrl,
         bloco: blocoSelecionado?.nome || null,
         apartamento: apartamentoNumero.trim(),
         tipo,
@@ -240,6 +486,11 @@ export default function MoradorDetalhesPage() {
       } as any)
 
       setMorador(atualizado)
+      setFacialUrl(String((atualizado as any).facial_url || ''))
+      setFacialFile(null)
+      setFacialPreviewUrl('')
+      setFacialQuality(null)
+      setFacialRemovida(false)
       setContatosAdicionais(normalizeContatosAdicionais((atualizado as any).contatos_adicionais))
       setApartamentoNumero(atualizado.apartamento || '')
       setObservacao(String((atualizado as any).observacao || ''))
@@ -341,7 +592,7 @@ export default function MoradorDetalhesPage() {
             </div>
           ) : !morador ? null : (
             <>
-              <div className="glass-card rounded-2xl overflow-hidden">
+              <div className="glass-card rounded-2xl overflow-visible">
                 <div className="p-6 border-b border-gray-100">
                   <div className="flex items-center gap-3">
                     <div className="w-11 h-11 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/25">
@@ -356,6 +607,99 @@ export default function MoradorDetalhesPage() {
 
                 <div className="p-6 space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Facial (foto)</label>
+                      <div className="rounded-2xl border border-slate-200 bg-white/70 shadow-sm p-4">
+                        <div className="grid grid-cols-1 gap-4 items-center">
+                          <div className="flex items-center gap-4 min-w-0">
+                            <div className="relative group">
+                              <button
+                                type="button"
+                                className="w-[72px] h-[72px] rounded-2xl border border-slate-200 bg-white overflow-hidden flex items-center justify-center shadow-sm cursor-pointer hover:ring-2 hover:ring-sky-500/20 hover:border-sky-300 transition-all"
+                                aria-label="Opções de foto"
+                              >
+                                {facialPreviewUrl || facialUrl ? (
+                                  <img src={facialPreviewUrl || facialUrl} alt="Prévia da facial" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+                                    <UserPlus size={20} className="text-slate-400" />
+                                  </div>
+                                )}
+                              </button>
+
+                              <div className="hidden group-focus-within:block absolute left-0 top-[calc(100%+10px)] z-[220] w-56">
+                                <div className="rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+                                  <div className="px-3 py-2 text-[11px] font-extrabold text-slate-600 bg-slate-50/60 border-b border-slate-100">
+                                    Atualizar facial
+                                  </div>
+                                  <div className="p-2 grid grid-cols-1 gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void abrirCamera()}
+                                      className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl font-semibold text-white
+                                               bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-500 hover:to-blue-600"
+                                    >
+                                      <Camera size={16} />
+                                      Tirar foto
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => fileInputRef.current?.click()}
+                                      className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-800"
+                                    >
+                                      <UserPlus size={16} />
+                                      Enviar foto
+                                    </button>
+
+                                    <input
+                                      ref={fileInputRef}
+                                      type="file"
+                                      accept="image/*"
+                                      capture="user"
+                                      className="hidden"
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0] || null
+                                        void handleSelecionarFacial(f)
+                                      }}
+                                    />
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFacialFile(null)
+                                        setFacialPreviewUrl('')
+                                        setFacialQuality(null)
+                                        setFacialUrl('')
+                                        setFacialRemovida(true)
+                                      }}
+                                      disabled={!facialFile && !facialUrl}
+                                      className="w-full inline-flex items-center justify-center px-3 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 font-semibold text-sm text-rose-700 disabled:opacity-50 disabled:hover:bg-rose-50"
+                                    >
+                                      Remover
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="min-w-0">
+                              <p className="text-sm font-extrabold text-slate-900">Foto para desbloqueio</p>
+                              <p className="text-xs text-slate-500 truncate">
+                                {facialFile?.name || (facialUrl ? 'Imagem cadastrada.' : 'Use uma foto frontal, com boa iluminação e sem blur.')}
+                              </p>
+                              {facialQuality ? (
+                                <div
+                                  className={`mt-2 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border
+                                    ${facialQuality.ok ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'}`}
+                                >
+                                  {facialQuality.message}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                     <div>
                       <label className="block text-sm font-semibold text-gray-700 mb-2">Nome *</label>
                       <input
@@ -593,6 +937,61 @@ export default function MoradorDetalhesPage() {
             </>
           )}
         </div>
+
+        {cameraOpen ? (
+          <div className="fixed inset-0 z-[200] flex items-start justify-center p-4 pt-24 sm:pt-28">
+            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={() => setCameraOpen(false)} />
+
+            <div className="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+              <div className="flex items-center justify-between gap-3 p-4 border-b border-slate-100">
+                <div className="min-w-0">
+                  <p className="text-base font-extrabold text-slate-900 truncate">Capturar facial</p>
+                  <p className="text-xs text-slate-500 truncate">Centralize o rosto e use boa iluminação.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(false)}
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700"
+                  aria-label="Fechar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-4">
+                {cameraError ? (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm font-semibold">
+                    {cameraError}
+                  </div>
+                ) : (
+                  <div className="w-full aspect-video rounded-2xl bg-slate-900 overflow-hidden border border-slate-200">
+                    <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 p-4 border-t border-slate-100 bg-slate-50/60">
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(false)}
+                  className="px-4 py-2.5 rounded-xl font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void capturarFoto()}
+                  disabled={!!cameraError}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white
+                           bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-500 hover:to-blue-600 shadow-md disabled:opacity-60"
+                >
+                  <Camera size={16} />
+                  Capturar
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </>
     </MainLayout>
   )

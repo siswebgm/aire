@@ -1,14 +1,11 @@
-import { useState } from 'react'
 import Head from 'next/head'
-import { ArrowLeft, Activity, TrendingUp, TrendingDown, Clock, Calendar, Filter } from 'lucide-react'
-import { useRouter } from 'next/router'
+import { Activity } from 'lucide-react'
 import PainelMovimentos from '../src/components/portas/PainelDiario'
 import { useAuth } from '../src/contexts/AuthContext'
 import { MainLayout } from '../components/MainLayout'
 
 export default function MovimentosPage() {
   const { condominio } = useAuth()
-  const router = useRouter()
 
   if (!condominio) {
     return (

@@ -53,6 +53,7 @@ export default async function handler(
 
     // 3. Atualizar status da porta para DISPONIVEL
     const agora = new Date().toISOString()
+    const motivoFinal = motivo || `Cancelamento via Totem - Porta ${numeroPorta}`
     
     const { error: updateError } = await supabase
       .from('gvt_portas')
@@ -63,7 +64,9 @@ export default async function handler(
         // Limpar dados do ocupante
         bloco_atual: null,
         apartamento_atual: null,
-        compartilhada: false
+        compartilhada: false,
+        sensor_ultima_leitura: motivoFinal,
+        sensor_ultima_leitura_em: agora
       })
       .eq('uid', porta.uid)
 
@@ -76,22 +79,71 @@ export default async function handler(
 
     console.log(`[TOTEM] Porta ${numeroPorta} atualizada para DISPONIVEL`)
 
-    // 4. Registrar movimentação de cancelamento
+    // 4. Atualizar movimentação existente (não criar nova linha)
     try {
-      await supabase
-        .from('gvt_movimentacoes_porta')
-        .insert({
-          porta_uid: porta.uid,
-          condominio_uid: condominioUid,
-          acao: 'CANCELAR_TOTEM',
-          status_resultante: 'DISPONIVEL',
-          origem: 'TOTEM',
-          observacao: motivo || `Cancelamento via Totem - Porta ${numeroPorta}`
-        })
-      console.log(`[TOTEM] Movimentação de cancelamento registrada`)
+      let movimentacaoExistente: any = null
+      let movSelectError: any = null
+
+      // Prioriza buscar a última movimentação ainda não cancelada.
+      // Se a coluna cancelado ainda não existir (migração pendente), faz fallback.
+      {
+        const result = await supabase
+          .from('gvt_movimentacoes_porta')
+          .select('uid, observacao, acao, status_resultante')
+          .eq('porta_uid', porta.uid)
+          .eq('condominio_uid', condominioUid)
+          .eq('status_resultante', 'OCUPADO')
+          .eq('cancelado', false)
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .single()
+
+        movimentacaoExistente = (result as any).data
+        movSelectError = (result as any).error
+      }
+
+      if (movSelectError && /cancelado/.test(String(movSelectError.message || ''))) {
+        const fallback = await supabase
+          .from('gvt_movimentacoes_porta')
+          .select('uid, observacao, acao, status_resultante')
+          .eq('porta_uid', porta.uid)
+          .eq('condominio_uid', condominioUid)
+          .eq('status_resultante', 'OCUPADO')
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .single()
+
+        movimentacaoExistente = (fallback as any).data
+        movSelectError = (fallback as any).error
+      }
+
+      if (movSelectError) {
+        console.warn('[TOTEM] Aviso: não foi possível buscar movimentação existente:', movSelectError)
+      } else if (!movimentacaoExistente?.uid) {
+        console.warn('[TOTEM] Aviso: nenhuma movimentação existente encontrada para atualizar')
+      } else {
+        const observacaoAnterior = (movimentacaoExistente as any).observacao || ''
+        const obsAtualizada = `${observacaoAnterior}${observacaoAnterior ? ' | ' : ''}CANCELADO: ${motivoFinal}`
+
+        const { error: movUpdateError } = await supabase
+          .from('gvt_movimentacoes_porta')
+          .update({
+            acao: 'cancelado',
+            status_resultante: 'DISPONIVEL',
+            cancelado: true,
+            observacao: obsAtualizada
+          })
+          .eq('uid', movimentacaoExistente.uid)
+
+        if (movUpdateError) {
+          console.warn('[TOTEM] Aviso: não foi possível atualizar movimentação:', movUpdateError)
+        } else {
+          console.log('[TOTEM] Movimentação existente atualizada para cancelado')
+        }
+      }
     } catch (movError) {
-      console.warn('[TOTEM] Aviso: não foi possível registrar movimentação:', movError)
-      // Não falha a operação se não conseguir registrar movimentação
+      console.warn('[TOTEM] Aviso: não foi possível atualizar movimentação:', movError)
+      // Não falha a operação se não conseguir atualizar movimentação
     }
 
     return res.status(200).json({

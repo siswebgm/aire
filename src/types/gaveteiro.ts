@@ -10,6 +10,7 @@ export interface ContatoAdicional {
   nome: string
   whatsapp: string
   email?: string
+  facial_url?: string
 }
 
 export interface Condominio {
@@ -20,6 +21,11 @@ export interface Condominio {
   ativo: boolean
   created_at: string
   senha_mestre?: string
+  wifi_login?: string
+  wifi_senha?: string
+  esp32_ip?: string
+  nome_fantasia?: string
+  storage?: string
 }
 
 export interface Gaveteiro {
@@ -48,6 +54,7 @@ export interface Porta {
   ultimo_evento_em: string
   cliente_uid?: string
   ativo: boolean
+  reservada_portaria?: boolean
   // Campos para identificar o ocupante atual
   bloco_atual?: string
   apartamento_atual?: string
@@ -78,8 +85,10 @@ export interface SenhaProvisoria {
 export interface MovimentacaoPorta {
   uid: string
   condominio_uid: string
+  condominio_nome?: string
   porta_uid: string
   usuario_uid?: string
+  senha_uid?: string
   acao: string
   status_resultante: string
   timestamp: string
@@ -88,6 +97,11 @@ export interface MovimentacaoPorta {
   bloco?: string
   apartamento?: string
   compartilhada?: boolean
+  numero_porta?: number
+  nome_morador?: string
+  whatsapp_morador?: string
+  email_morador?: string
+  contatos_adicionais?: any
 }
 
 export interface ResumoPortas {
@@ -119,6 +133,7 @@ export interface Morador {
   nome: string
   email?: string
   whatsapp?: string
+  facial_url?: string
   bloco?: string
   apartamento: string
   tipo: TipoMorador

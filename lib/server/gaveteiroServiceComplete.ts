@@ -47,6 +47,19 @@ export async function buscarCondominio(uid: string): Promise<Condominio | null> 
   return data
 }
 
+export async function criarCondominio(
+  condominio: Omit<Condominio, 'uid' | 'created_at'>
+): Promise<Condominio> {
+  const { data, error } = await supabaseServer
+    .from(TABLES.condominios)
+    .insert(condominio)
+    .select('*')
+    .single()
+
+  if (error) throw error
+  return data as Condominio
+}
+
 export async function buscarSenhaMestre(condominioUid: string): Promise<string | null> {
   const { data, error } = await supabaseServer
     .from(TABLES.condominios)
@@ -56,6 +69,124 @@ export async function buscarSenhaMestre(condominioUid: string): Promise<string |
 
   if (error) return null
   return data?.senha_mestre || null
+}
+
+export async function validarSenhaCompleta(
+  senha: string,
+  condominioUid?: string
+): Promise<{
+  tipo: 'PROVISORIA' | 'MESTRE' | 'INVALIDA'
+  senhaUid?: string
+  portaUid?: string
+  bloco?: string
+  apartamento?: string
+  porta?: any
+  gaveteiro?: any
+  condominio?: any
+}> {
+  const fetchDetalhes = async (portaUid: string, condUid: string) => {
+    const { data: porta } = await supabaseServer
+      .from(TABLES.portas)
+      .select('*')
+      .eq('uid', portaUid)
+      .single()
+
+    let gaveteiro: any = null
+    if (porta?.gaveteiro_uid) {
+      const { data: gvt } = await supabaseServer
+        .from(TABLES.gaveteiros)
+        .select('*')
+        .eq('uid', porta.gaveteiro_uid)
+        .single()
+      gaveteiro = gvt || null
+    }
+
+    const { data: condominio } = await supabaseServer
+      .from(TABLES.condominios)
+      .select('*')
+      .eq('uid', condUid)
+      .single()
+
+    return { porta: porta || null, gaveteiro, condominio: condominio || null }
+  }
+
+  if (condominioUid) {
+    const { data: senhaData, error: senhaError } = await supabaseServer
+      .from(TABLES.senhas_provisorias)
+      .select('uid, porta_uid, bloco, apartamento')
+      .eq('condominio_uid', condominioUid)
+      .eq('senha', senha)
+      .eq('status', 'ATIVA')
+      .single()
+
+    if (!senhaError && senhaData) {
+      const detalhes = await fetchDetalhes(senhaData.porta_uid, condominioUid)
+      return {
+        tipo: 'PROVISORIA',
+        senhaUid: senhaData.uid,
+        portaUid: senhaData.porta_uid,
+        bloco: senhaData.bloco,
+        apartamento: senhaData.apartamento,
+        porta: detalhes.porta,
+        gaveteiro: detalhes.gaveteiro,
+        condominio: detalhes.condominio
+      }
+    }
+
+    const senhaMestre = await buscarSenhaMestre(condominioUid)
+    if (senhaMestre && senhaMestre === senha) {
+      const { data: condominio } = await supabaseServer
+        .from(TABLES.condominios)
+        .select('*')
+        .eq('uid', condominioUid)
+        .single()
+
+      return {
+        tipo: 'MESTRE',
+        condominio: condominio || null
+      }
+    }
+
+    return { tipo: 'INVALIDA' }
+  }
+
+  const { data: senhaData } = await supabaseServer
+    .from(TABLES.senhas_provisorias)
+    .select('uid, porta_uid, bloco, apartamento, condominio_uid')
+    .eq('senha', senha)
+    .eq('status', 'ATIVA')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  if (senhaData) {
+    const detalhes = await fetchDetalhes(senhaData.porta_uid, senhaData.condominio_uid)
+    return {
+      tipo: 'PROVISORIA',
+      senhaUid: senhaData.uid,
+      portaUid: senhaData.porta_uid,
+      bloco: senhaData.bloco,
+      apartamento: senhaData.apartamento,
+      porta: detalhes.porta,
+      gaveteiro: detalhes.gaveteiro,
+      condominio: detalhes.condominio
+    }
+  }
+
+  const { data: condominios } = await supabaseServer
+    .from(TABLES.condominios)
+    .select('*')
+    .eq('senha_mestre', senha)
+    .limit(1)
+
+  if (condominios && condominios.length > 0) {
+    return {
+      tipo: 'MESTRE',
+      condominio: condominios[0]
+    }
+  }
+
+  return { tipo: 'INVALIDA' }
 }
 
 // ============================================
@@ -220,9 +351,19 @@ export async function criarSenhaProvisoria(
   bloco: string,
   apartamento: string
 ): Promise<string> {
+  const { senha } = await criarSenhaProvisoriaComUid(portaUid, condominioUid, bloco, apartamento)
+  return senha
+}
+
+async function criarSenhaProvisoriaComUid(
+  portaUid: string,
+  condominioUid: string,
+  bloco: string,
+  apartamento: string
+): Promise<{ uid: string; senha: string }> {
   const senha = await gerarSenhaUnica(condominioUid)
 
-  const { error } = await supabaseServer
+  const { data, error } = await supabaseServer
     .from(TABLES.senhas_provisorias)
     .insert({
       porta_uid: portaUid,
@@ -232,9 +373,11 @@ export async function criarSenhaProvisoria(
       senha,
       status: 'ATIVA'
     })
+    .select('uid, senha')
+    .single()
 
   if (error) throw error
-  return senha
+  return { uid: (data as any).uid, senha: (data as any).senha }
 }
 
 export async function cancelarSenhasPorta(portaUid: string): Promise<void> {
@@ -304,14 +447,239 @@ export async function registrarMovimentacao(
   observacao?: string,
   bloco?: string,
   apartamento?: string,
-  compartilhada?: boolean
+  compartilhada?: boolean,
+  senhaUid?: string,
+  destinatarios?: Destinatario[]
 ): Promise<string> {
+  // Preenche campos extras (snapshot) para facilitar relatórios
+  let condominioNome: string | null = null
+  let numeroPorta: number | null = null
+  let nomeMorador: string | null = null
+  let whatsappMorador: string | null = null
+  let emailMorador: string | null = null
+  let contatosAdicionaisMov: any = null
+  let destinatariosResumo: any = null
+
+  try {
+    if (condominioUid) {
+      const { data: condominioData } = await supabaseServer
+        .from(TABLES.condominios)
+        .select('nome')
+        .eq('uid', condominioUid)
+        .maybeSingle()
+      condominioNome = (condominioData as any)?.nome ?? null
+    }
+
+    if (portaUid) {
+      const { data: portaData } = await supabaseServer
+        .from(TABLES.portas)
+        .select('numero_porta')
+        .eq('uid', portaUid)
+        .maybeSingle()
+      numeroPorta = typeof portaData?.numero_porta === 'number' ? portaData.numero_porta : null
+    }
+
+    const buscarMorador = async (b?: string | null, a?: string | null) => {
+      const blocoNorm = typeof b === 'string' ? b.trim() : null
+      const aptoNorm = typeof a === 'string' ? a.trim() : null
+
+      const stripLeadingZeros = (v: string) => v.replace(/^0+(?!$)/, '')
+      const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)))
+
+      const aptoCandidatos = aptoNorm ? unique([aptoNorm, stripLeadingZeros(aptoNorm)]) : []
+
+      const blocoCandidatos = (() => {
+        if (!blocoNorm) return []
+
+        const digits = blocoNorm.match(/\d+/)?.[0] ?? null
+        const digitsNoZero = digits ? stripLeadingZeros(digits) : null
+        const digits2 = digitsNoZero ? digitsNoZero.padStart(2, '0') : null
+
+        // Exemplos suportados:
+        // - '02' / '2'
+        // - 'Bloco 02' / 'Bloco 2'
+        // - qualquer valor original vindo do sistema
+        return unique([
+          blocoNorm,
+          stripLeadingZeros(blocoNorm),
+          digits ?? '',
+          digitsNoZero ?? '',
+          digits2 ?? '',
+          digits2 ? `Bloco ${digits2}` : '',
+          digitsNoZero ? `Bloco ${digitsNoZero}` : ''
+        ])
+      })()
+
+      if (condominioUid && aptoNorm) {
+        console.log('[MOV][SERVER] buscarMorador:', {
+          condominioUid,
+          bloco: blocoNorm,
+          apartamento: aptoNorm,
+          blocoCandidatos,
+          aptoCandidatos
+        })
+
+        let query = supabaseServer
+          .from(TABLES.moradores)
+          .select('nome, whatsapp, email, contatos_adicionais')
+          .eq('condominio_uid', condominioUid)
+          .in('apartamento', aptoCandidatos.length > 0 ? aptoCandidatos : [aptoNorm])
+          .eq('ativo', true)
+          .eq('deletado', false)
+
+        if (blocoCandidatos.length > 0) {
+          query = query.in('bloco', blocoCandidatos)
+        } else {
+          // Em alguns condomínios o morador não tem bloco (NULL)
+          query = query.is('bloco', null)
+        }
+
+        const { data: moradorData, error: moradorErr } = await query.maybeSingle()
+        if (moradorErr) {
+          console.warn('[MOV][SERVER] Erro ao buscar morador (por bloco+apto):', {
+            message: (moradorErr as any)?.message,
+            details: (moradorErr as any)?.details,
+            hint: (moradorErr as any)?.hint,
+            code: (moradorErr as any)?.code
+          })
+        }
+
+        if (moradorData) {
+          console.log('[MOV][SERVER] Morador encontrado (por bloco+apto).')
+          return moradorData as any
+        }
+
+        console.log('[MOV][SERVER] Morador NÃO encontrado (por bloco+apto).')
+
+        // Se houve erro (ex.: múltiplas linhas), tenta pegar 1 registro explicitamente.
+        if (moradorErr) {
+          try {
+            let pickOne = supabaseServer
+              .from(TABLES.moradores)
+              .select('nome, whatsapp, email, contatos_adicionais')
+              .eq('condominio_uid', condominioUid)
+              .in('apartamento', aptoCandidatos.length > 0 ? aptoCandidatos : [aptoNorm])
+              .eq('ativo', true)
+              .eq('deletado', false)
+
+            if (blocoCandidatos.length > 0) {
+              pickOne = pickOne.in('bloco', blocoCandidatos)
+            } else {
+              pickOne = pickOne.is('bloco', null)
+            }
+
+            const { data: firstRow } = await pickOne
+              .order('updated_at', { ascending: false })
+              .limit(1)
+
+            const morador = (firstRow as any)?.[0]
+            console.log('[MOV][SERVER] Morador selecionado via fallback limit(1)?', Boolean(morador))
+            if (morador) return morador as any
+          } catch (e) {
+            console.warn('[MOV][SERVER] Falha no fallback limit(1) do morador:', e)
+          }
+        }
+
+        // Fallback: se não encontrou por bloco+apartamento, tenta apenas pelo apartamento.
+        // Só funciona se houver no máximo 1 morador para o apartamento dentro do condomínio.
+        const { data: byApto, error: byAptoErr } = await supabaseServer
+          .from(TABLES.moradores)
+          .select('nome, whatsapp, email, contatos_adicionais')
+          .eq('condominio_uid', condominioUid)
+          .in('apartamento', aptoCandidatos.length > 0 ? aptoCandidatos : [aptoNorm])
+          .eq('ativo', true)
+          .eq('deletado', false)
+          .maybeSingle()
+
+        if (byAptoErr) {
+          console.warn('[MOV][SERVER] Erro ao buscar morador (fallback por apto):', {
+            message: (byAptoErr as any)?.message,
+            details: (byAptoErr as any)?.details,
+            hint: (byAptoErr as any)?.hint,
+            code: (byAptoErr as any)?.code
+          })
+
+          // Se múltiplos, pega 1 mais recente.
+          try {
+            const { data: firstRow } = await supabaseServer
+              .from(TABLES.moradores)
+              .select('nome, whatsapp, email, contatos_adicionais')
+              .eq('condominio_uid', condominioUid)
+              .in('apartamento', aptoCandidatos.length > 0 ? aptoCandidatos : [aptoNorm])
+              .eq('ativo', true)
+              .eq('deletado', false)
+              .order('updated_at', { ascending: false })
+              .limit(1)
+
+            const morador = (firstRow as any)?.[0]
+            console.log('[MOV][SERVER] Morador selecionado via fallback apto limit(1)?', Boolean(morador))
+            return morador as any
+          } catch (e) {
+            console.warn('[MOV][SERVER] Falha no fallback apto limit(1) do morador:', e)
+          }
+        }
+
+        console.log('[MOV][SERVER] Morador encontrado (fallback por apto)?', Boolean(byApto))
+        return byApto as any
+      }
+    }
+
+    if (destinatarios && destinatarios.length > 0) {
+      if (destinatarios.length === 1) {
+        const d0 = destinatarios[0]
+        const morador = await buscarMorador(d0.bloco, d0.apartamento)
+        if (morador) {
+          nomeMorador = morador.nome ?? null
+          whatsappMorador = morador.whatsapp ?? null
+          emailMorador = morador.email ?? null
+          contatosAdicionaisMov = morador.contatos_adicionais ?? null
+        }
+      } else {
+        const resumo = []
+        for (const d of destinatarios) {
+          const morador = await buscarMorador(d.bloco, d.apartamento)
+          resumo.push({
+            bloco: d.bloco,
+            apartamento: d.apartamento,
+            nome: morador?.nome ?? null,
+            whatsapp: morador?.whatsapp ?? null,
+            email: morador?.email ?? null,
+            contatos_adicionais: morador?.contatos_adicionais ?? []
+          })
+        }
+        destinatariosResumo = resumo
+        contatosAdicionaisMov = resumo
+      }
+    } else if (
+      condominioUid &&
+      bloco &&
+      apartamento &&
+      !String(bloco).includes(',') &&
+      !String(apartamento).includes(',')
+    ) {
+      const blocoNorm = typeof bloco === 'string' ? bloco.trim() : null
+      const aptoNorm = typeof apartamento === 'string' ? apartamento.trim() : null
+      const morador = await buscarMorador(blocoNorm, aptoNorm)
+      if (morador) {
+        nomeMorador = morador.nome ?? null
+        whatsappMorador = morador.whatsapp ?? null
+        emailMorador = morador.email ?? null
+        contatosAdicionaisMov = morador.contatos_adicionais ?? null
+      }
+    }
+  } catch (e) {
+    // Falha ao preencher snapshot não deve impedir a movimentação
+    console.warn('[MOV][SERVER] Falha ao preencher campos extras da movimentação:', e)
+  }
+
   const { data, error } = await supabaseServer
     .from(TABLES.movimentacoes_porta)
     .insert({
       porta_uid: portaUid,
       condominio_uid: condominioUid,
+      condominio_nome: condominioNome,
       usuario_uid: usuarioUid,
+      senha_uid: senhaUid || null,
       acao,
       status_resultante: statusResultante,
       timestamp: new Date().toISOString(),
@@ -319,12 +687,46 @@ export async function registrarMovimentacao(
       observacao,
       bloco,
       apartamento,
-      compartilhada
+      compartilhada,
+      destinatarios: destinatarios || null,
+      destinatarios_resumo: destinatariosResumo,
+      // Novas colunas (opcionais)
+      numero_porta: numeroPorta,
+      nome_morador: nomeMorador,
+      whatsapp_morador: whatsappMorador,
+      email_morador: emailMorador,
+      contatos_adicionais: contatosAdicionaisMov
     })
     .select('uid')
     .single()
 
   if (error) throw error
+
+  // Segurança extra: alguns ambientes possuem triggers que podem sobrescrever campos.
+  // Re-grava explicitamente os snapshots quando calculados.
+  try {
+    if (
+      nomeMorador !== null ||
+      whatsappMorador !== null ||
+      emailMorador !== null ||
+      contatosAdicionaisMov !== null ||
+      destinatariosResumo !== null
+    ) {
+      await supabaseServer
+        .from(TABLES.movimentacoes_porta)
+        .update({
+          nome_morador: nomeMorador,
+          whatsapp_morador: whatsappMorador,
+          email_morador: emailMorador,
+          contatos_adicionais: contatosAdicionaisMov,
+          destinatarios_resumo: destinatariosResumo
+        })
+        .eq('uid', data.uid)
+    }
+  } catch (e) {
+    console.warn('[MOV][SERVER] Falha ao regravar snapshots pós-insert:', e)
+  }
+
   return data.uid
 }
 
@@ -552,6 +954,68 @@ export async function ocuparPorta(params: {
 }): Promise<{ sucesso: boolean; senhas: SenhaDestinatario[] }> {
   const { portaUid, condominioUid, destinatarios, usuarioUid, observacao } = params
 
+  const stripLeadingZeros = (v: string) => v.replace(/^0+(?!$)/, '')
+  const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)))
+  const normalizeBlocoCandidates = (bloco?: string | null) => {
+    const blocoNorm = typeof bloco === 'string' ? bloco.trim() : null
+    if (!blocoNorm) return [] as string[]
+    const digits = blocoNorm.match(/\d+/)?.[0] ?? null
+    const digitsNoZero = digits ? stripLeadingZeros(digits) : null
+    const digits2 = digitsNoZero ? digitsNoZero.padStart(2, '0') : null
+    return unique([
+      blocoNorm,
+      stripLeadingZeros(blocoNorm),
+      digits ?? '',
+      digitsNoZero ?? '',
+      digits2 ?? '',
+      digits2 ? `Bloco ${digits2}` : '',
+      digitsNoZero ? `Bloco ${digitsNoZero}` : ''
+    ])
+  }
+
+  const normalizeAptoCandidates = (apto?: string | null) => {
+    const aptoNorm = typeof apto === 'string' ? apto.trim() : null
+    if (!aptoNorm) return [] as string[]
+    return unique([aptoNorm, stripLeadingZeros(aptoNorm)])
+  }
+
+  const buscarMoradorSnapshot = async (bloco?: string | null, apartamento?: string | null) => {
+    const aptoCands = normalizeAptoCandidates(apartamento)
+    const blocoCands = normalizeBlocoCandidates(bloco)
+    const aptoNorm = typeof apartamento === 'string' ? apartamento.trim() : null
+
+    if (!condominioUid || !aptoNorm) return null
+
+    let query = supabaseServer
+      .from(TABLES.moradores)
+      .select('nome, whatsapp, email, contatos_adicionais')
+      .eq('condominio_uid', condominioUid)
+      .in('apartamento', aptoCands.length > 0 ? aptoCands : [aptoNorm])
+      .eq('ativo', true)
+      .eq('deletado', false)
+
+    if (blocoCands.length > 0) {
+      query = query.in('bloco', blocoCands)
+    } else {
+      query = query.is('bloco', null)
+    }
+
+    const { data, error } = await query.maybeSingle()
+    if (!error && data) return data as any
+
+    const { data: rows } = await supabaseServer
+      .from(TABLES.moradores)
+      .select('nome, whatsapp, email, contatos_adicionais')
+      .eq('condominio_uid', condominioUid)
+      .in('apartamento', aptoCands.length > 0 ? aptoCands : [aptoNorm])
+      .eq('ativo', true)
+      .eq('deletado', false)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+
+    return (rows as any)?.[0] ?? null
+  }
+
   // Buscar dados do gaveteiro para a porta
   const { data: portaData } = await supabaseServer
     .from(TABLES.portas)
@@ -573,6 +1037,18 @@ export async function ocuparPorta(params: {
   const blocos = destinatarios.map(d => d.bloco).join(', ')
   const apartamentos = destinatarios.map(d => d.apartamento).join(', ')
 
+  let condominioNome: string | null = null
+  try {
+    const { data: cond } = await supabaseServer
+      .from(TABLES.condominios)
+      .select('nome')
+      .eq('uid', condominioUid)
+      .maybeSingle()
+    condominioNome = (cond as any)?.nome ?? null
+  } catch {
+    condominioNome = null
+  }
+
   // Atualizar status da porta
   await atualizarStatusPorta(portaUid, 'OCUPADO', usuarioUid, blocos, apartamentos, compartilhada)
 
@@ -587,17 +1063,27 @@ export async function ocuparPorta(params: {
     observacao,
     blocos,
     apartamentos,
-    compartilhada
+    compartilhada,
+    undefined,
+    destinatarios
   )
 
   // Gerar senhas e criar entregas para cada destinatário
   const senhas: SenhaDestinatario[] = []
+  const totalSenhas = destinatarios.reduce((acc, d) => acc + (d.quantidade || 1), 0)
+  let senhaUidUnica: string | null = null
 
   for (const dest of destinatarios) {
     const qtd = dest.quantidade || 1
     for (let i = 0; i < qtd; i++) {
-      const senha = await criarSenhaProvisoria(portaUid, condominioUid, dest.bloco, dest.apartamento)
-      senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha })
+      if (totalSenhas === 1) {
+        const created = await criarSenhaProvisoriaComUid(portaUid, condominioUid, dest.bloco, dest.apartamento)
+        senhaUidUnica = created.uid
+        senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha: created.senha })
+      } else {
+        const senha = await criarSenhaProvisoria(portaUid, condominioUid, dest.bloco, dest.apartamento)
+        senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha })
+      }
 
       // Criar registro de entrega
       await supabaseServer
@@ -617,6 +1103,75 @@ export async function ocuparPorta(params: {
           compartilhada
         })
     }
+  }
+
+  // Se houve exatamente 1 senha gerada, vincular a movimentação OCUPAR a essa senha
+  if (totalSenhas === 1 && senhaUidUnica) {
+    try {
+      await supabaseServer
+        .from(TABLES.movimentacoes_porta)
+        .update({ senha_uid: senhaUidUnica })
+        .eq('uid', movimentacaoUid)
+    } catch (e) {
+      console.warn('[MOV][SERVER] Falha ao vincular senha_uid na movimentação de OCUPAR:', e)
+    }
+  }
+
+  try {
+    const destinatariosEnriquecidos = [] as any[]
+    for (const s of senhas) {
+      const morador = await buscarMoradorSnapshot(s.bloco, s.apartamento)
+      destinatariosEnriquecidos.push({
+        bloco: s.bloco,
+        apartamento: s.apartamento,
+        senha: s.senha,
+        status: 'ATIVA',
+        numero_porta: portaData?.numero_porta ?? null,
+        condominio_nome: condominioNome,
+        nome_morador: morador?.nome ?? null,
+        whatsapp_morador: morador?.whatsapp ?? null,
+        email_morador: morador?.email ?? null,
+        contatos_adicionais: morador?.contatos_adicionais ?? []
+      })
+    }
+
+    const destinatariosResumoComSenha = (() => {
+      const map = new Map<string, any>()
+
+      for (const d of destinatariosEnriquecidos) {
+        const key = `${String(d.bloco ?? '')}::${String(d.apartamento ?? '')}`
+        const existing = map.get(key)
+        if (existing) {
+          existing.senhas = [...(existing.senhas || []), d.senha].filter(Boolean)
+          continue
+        }
+
+        map.set(key, {
+          bloco: d.bloco,
+          apartamento: d.apartamento,
+          nome: d.nome_morador ?? null,
+          whatsapp: d.whatsapp_morador ?? null,
+          email: d.email_morador ?? null,
+          contatos_adicionais: d.contatos_adicionais ?? [],
+          senhas: d.senha ? [d.senha] : [],
+          status: d.status ?? 'ATIVA'
+        })
+      }
+
+      return Array.from(map.values())
+    })()
+
+    if (destinatariosEnriquecidos.length > 0) {
+      await supabaseServer
+        .from(TABLES.movimentacoes_porta)
+        .update({
+          destinatarios: destinatariosEnriquecidos,
+          destinatarios_resumo: destinatariosResumoComSenha
+        })
+        .eq('uid', movimentacaoUid)
+    }
+  } catch (e) {
+    console.warn('[MOV][SERVER] Falha ao enriquecer destinatarios na movimentação:', e)
   }
 
   return { sucesso: true, senhas }
@@ -648,8 +1203,9 @@ export async function cancelarOcupacao(
       await supabaseServer
         .from(TABLES.movimentacoes_porta)
         .update({
-          acao: 'CANCELAR',
+          acao: 'cancelado',
           status_resultante: 'DISPONIVEL',
+          cancelado: true,
           observacao: `${(movimentacaoExistente as any).observacao || ''} | CANCELADO: ${motivo}`.trim(),
           timestamp: new Date().toISOString()
         })
@@ -759,6 +1315,21 @@ export async function liberarPortaComSenha(
   senha: string,
   usuarioUid?: string
 ): Promise<{ sucesso: boolean; mensagem: string; portaUid?: string }> {
+  // Captura o UID da senha ATIVA para registrar na movimentação (FK)
+  let senhaUid: string | null = null
+  try {
+    const { data } = await supabaseServer
+      .from(TABLES.senhas_provisorias)
+      .select('uid')
+      .eq('condominio_uid', condominioUid)
+      .eq('senha', senha)
+      .eq('status', 'ATIVA')
+      .maybeSingle()
+    senhaUid = (data as any)?.uid ?? null
+  } catch {
+    // Não bloqueia o fluxo se não conseguir obter o UID
+  }
+
   const validacao = await validarSenha(condominioUid, senha)
 
   if (!validacao.valida || !validacao.portaUid) {
@@ -766,6 +1337,25 @@ export async function liberarPortaComSenha(
   }
 
   await marcarSenhaUsada(condominioUid, senha, usuarioUid)
+
+  // Registrar movimentação de retirada (sempre que a senha for consumida)
+  try {
+    await registrarMovimentacao(
+      validacao.portaUid,
+      condominioUid,
+      'RETIRADA',
+      'OCUPADO',
+      usuarioUid,
+      'TOTEM',
+      `Retirada - Bloco ${validacao.bloco} Apto ${validacao.apartamento}`,
+      validacao.bloco,
+      validacao.apartamento,
+      undefined,
+      senhaUid || undefined
+    )
+  } catch (e) {
+    console.warn('[MOV][SERVER] Falha ao registrar movimentação de retirada:', e)
+  }
 
   // Atualizar entrega para RETIRADO
   await supabaseServer
@@ -796,7 +1386,11 @@ export async function liberarPortaComSenha(
       'DISPONIVEL',
       usuarioUid,
       'TOTEM',
-      `Última retirada - Bloco ${validacao.bloco} Apto ${validacao.apartamento}`
+      `Última retirada - Bloco ${validacao.bloco} Apto ${validacao.apartamento}`,
+      undefined,
+      undefined,
+      undefined,
+      senhaUid || undefined
     )
   }
 

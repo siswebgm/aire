@@ -134,13 +134,13 @@ export default function BlocosApartamentosPage() {
       if (editandoBloco) {
         await atualizarBloco(editandoBloco.uid, {
           nome: formBloco.nome.trim(),
-          descricao: formBloco.descricao.trim() || null
+          descricao: formBloco.descricao.trim() || undefined
         })
       } else {
         await criarBloco({
           condominio_uid: condominio.uid,
           nome: formBloco.nome.trim(),
-          descricao: formBloco.descricao.trim() || null,
+          descricao: formBloco.descricao.trim() || undefined,
           ativo: true
         } as any)
       }
@@ -201,10 +201,10 @@ export default function BlocosApartamentosPage() {
     try {
       const dados = {
         condominio_uid: condominio.uid,
-        bloco_uid: blocoParaApartamento?.uid || null,
+        bloco_uid: blocoParaApartamento?.uid || undefined,
         numero: formApartamento.numero.trim(),
-        andar: formApartamento.andar ? parseInt(formApartamento.andar) : null,
-        descricao: formApartamento.descricao.trim() || null,
+        andar: formApartamento.andar ? parseInt(formApartamento.andar) : undefined,
+        descricao: formApartamento.descricao.trim() || undefined,
         ativo: true
       }
 

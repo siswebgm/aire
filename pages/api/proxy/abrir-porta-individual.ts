@@ -38,56 +38,17 @@ export default async function handler(
       throw new Error('Condomínio não encontrado')
     }
 
-    const esp32Ip = condominios.esp32_ip || '192.168.1.76'
-    console.log(`[PROXY] IP do banco: ${esp32Ip}`)
-    
-    // 🔍 TENTAR DESCOBERTA AUTOMÁTICA SE IP FOR O PADRÃO
-    let esp32Url = `http://${esp32Ip}/abrir?condominio_uid=${condominioUid}&porta_uid=${portaUid}&porta=${porta}&token=${securityToken}`
-    
-    if (esp32Ip === '192.168.1.76') {
-      console.log('[PROXY] IP padrão detectado, tentando descoberta automática...')
-      
-      // Tentar IPs próximos
-      const ipsParaTestar = ['192.168.1.75', '192.168.1.74', '192.168.1.77']
-      let ipFuncionando = null
-      
-      for (const ip of ipsParaTestar) {
-        try {
-          console.log(`[PROXY] Testando IP: ${ip}`)
-          const testUrl = `http://${ip}/discovery`
-          const testResponse = await fetch(testUrl, { 
-            method: 'GET',
-            signal: AbortSignal.timeout(2000)
-          })
-          
-          if (testResponse.ok) {
-            const data = await testResponse.json()
-            if (data.device && data.device.includes('AIRE-ESP32')) {
-              console.log(`[PROXY] ✅ ESP32 encontrado em: ${ip}`)
-              ipFuncionando = ip
-              
-              // 🔄 ATUALIZAR BANCO DE DADOS COM IP CORRETO
-              await supabase
-                .from('gvt_condominios')
-                .update({ esp32_ip: ip })
-                .eq('uid', condominioUid)
-              
-              console.log(`[PROXY] 🔄 Banco de dados atualizado com IP: ${ip}`)
-              break
-            }
-          }
-        } catch (error) {
-          console.log(`[PROXY] ❌ IP ${ip} não respondeu`)
-        }
-      }
-      
-      if (ipFuncionando) {
-        esp32Url = `http://${ipFuncionando}/abrir?condominio_uid=${condominioUid}&porta_uid=${portaUid}&porta=${porta}&token=${securityToken}`
-        console.log(`[PROXY] Usando IP descoberto: ${ipFuncionando}`)
-      } else {
-        console.log('[PROXY] ⚠️ Nenhum ESP32 encontrado, usando IP padrão')
-      }
+    const esp32Ip = String(condominios.esp32_ip || '').trim()
+    if (!esp32Ip) {
+      return res.status(400).json({
+        success: false,
+        error: 'ESP32 não configurado para este condomínio. Configure o campo esp32_ip em gvt_condominios.'
+      })
     }
+
+    console.log(`[PROXY] IP do banco: ${esp32Ip}`)
+
+    const esp32Url = `http://${esp32Ip}/abrir?condominio_uid=${condominioUid}&porta_uid=${portaUid}&porta=${porta}&token=${securityToken}`
     
     console.log(`[PROXY] URL final: ${esp32Url}`)
 

@@ -55,18 +55,20 @@ export default async function handler(
       
       if (fetchError.name === 'AbortError') {
         console.log(`[PROXY] ❌ Timeout ao testar IP: ${ip}`)
-        return res.status(408).json({ 
+        return res.status(200).json({
           success: false,
           error: 'Timeout',
-          message: 'ESP32 não respondeu a tempo'
+          message: 'ESP32 não respondeu a tempo',
+          ip
         })
       }
 
       console.log(`[PROXY] ❌ Erro ao testar IP ${ip}:`, fetchError.message)
-      return res.status(500).json({ 
+      return res.status(200).json({
         success: false,
         error: 'Erro de conexão',
-        message: fetchError.message
+        message: fetchError.message,
+        ip
       })
     }
 

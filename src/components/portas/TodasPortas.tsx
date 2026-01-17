@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/router'
 import { Lock, Unlock, Key, Trash2, Users, AlertTriangle, X, RefreshCw, Maximize2, Minimize2, Activity, Search } from 'lucide-react'
 import type { Porta } from '../../types/gaveteiro'
-import { listarTodasPortas, ocuparPorta, liberarPortaComSenha, cancelarOcupacao, type Destinatario } from '../../services/gaveteiroService'
+import { listarTodasPortas, ocuparPorta, liberarPortaComSenha, cancelarOcupacao, listarUltimasEntregas, type Destinatario } from '../../services/gaveteiroService'
 import { useAuth } from '../../contexts/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { PageHeader } from '../../../components/PageHeader'
@@ -34,6 +35,11 @@ export default function TodasPortas() {
   const router = useRouter()
   const [portas, setPortas] = useState<PortaDetalhada[]>([])
   const [loading, setLoading] = useState(true)
+  const [portalMounted, setPortalMounted] = useState(false)
+  const [grupoFocusAberto, setGrupoFocusAberto] = useState(false)
+  const [ultimasEntregas, setUltimasEntregas] = useState<any[]>([])
+  const [loadingEntregas, setLoadingEntregas] = useState(false)
+  const [erroEntregas, setErroEntregas] = useState<string | null>(null)
   const [portaSelecionada, setPortaSelecionada] = useState<PortaDetalhada | null>(null)
   const [showPainelLateral, setShowPainelLateral] = useState(false)
   const [loadingAcao, setLoadingAcao] = useState(false)
@@ -59,8 +65,58 @@ export default function TodasPortas() {
   }, [consultaAberta])
 
   useEffect(() => {
+    setPortalMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!grupoFocusAberto) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGrupoFocusAberto(false)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [grupoFocusAberto])
+
+  useEffect(() => {
     carregarPortas()
   }, [condominio?.uid])
+
+  const carregarUltimasEntregas = async () => {
+    if (!condominio?.uid) return
+    setLoadingEntregas(true)
+    setErroEntregas(null)
+    try {
+      const data = await listarUltimasEntregas(condominio.uid, 20)
+      setUltimasEntregas(data as any[])
+    } catch (error) {
+      console.error('❌ Erro ao carregar últimas entregas:', error)
+      const msg =
+        error && typeof error === 'object' && 'message' in (error as any)
+          ? String((error as any).message)
+          : 'Erro ao carregar últimas entregas'
+      setErroEntregas(msg)
+    } finally {
+      setLoadingEntregas(false)
+    }
+  }
+
+  const carregarPortasSilencioso = async () => {
+    if (!condominio?.uid) return
+    try {
+      const todasPortas = await listarTodasPortas(condominio.uid)
+      setPortas(todasPortas)
+      setUltimaAtualizacao(new Date())
+    } catch (error) {
+      console.error('❌ Erro ao carregar portas (silencioso):', error)
+    }
+  }
+
+  useEffect(() => {
+    if (!grupoFocusAberto) return
+    carregarUltimasEntregas()
+  }, [grupoFocusAberto, condominio?.uid])
 
   // Supabase Realtime updates
   useEffect(() => {
@@ -86,7 +142,43 @@ export default function TodasPortas() {
           console.log('🔄 Mudança em tempo real detectada:', payload)
           console.log('📊 Evento:', payload.eventType)
           console.log('📋 Dados:', payload.new)
-          carregarPortas() // Recarregar todas as portas quando houver mudança
+
+          // Evitar piscar o grid (setLoading) a cada evento.
+          // Atualiza de forma incremental usando payload.new/old.
+          if (payload.eventType === 'UPDATE' && payload.new && typeof payload.new === 'object') {
+            const novo: any = payload.new
+            let encontrou = false
+            setPortas((prev) => {
+              const next = prev.map((p) => {
+                if (p.uid === novo.uid) {
+                  encontrou = true
+                  return { ...p, ...novo }
+                }
+                return p
+              })
+              return next
+            })
+
+            // Se não encontrou a porta no estado atual, faz refresh silencioso.
+            if (!encontrou) {
+              carregarPortasSilencioso()
+            }
+          } else if (payload.eventType === 'INSERT' && payload.new && typeof payload.new === 'object') {
+            const novo: any = payload.new
+            setPortas((prev) => {
+              if (prev.some((p) => p.uid === novo.uid)) return prev
+              // payload.new pode não conter campos derivados (ex.: gaveteiro_nome), então inserimos e depois sincronizamos.
+              return [{ ...(novo as any) }, ...prev]
+            })
+            carregarPortasSilencioso()
+          } else if (payload.eventType === 'DELETE' && payload.old && typeof payload.old === 'object') {
+            const antigo: any = payload.old
+            setPortas((prev) => prev.filter((p) => p.uid !== antigo.uid))
+          } else {
+            // Fallback para tipos inesperados
+            carregarPortasSilencioso()
+          }
+
           setUltimaAtualizacao(new Date())
         }
       )
@@ -158,6 +250,10 @@ export default function TodasPortas() {
     setLoadingAcao(true)
     try {
       if (acao === 'ocupar') {
+        if ((portaSelecionada as any)?.reservada_portaria) {
+          throw new Error('Esta porta está reservada para a portaria e não pode ser utilizada para entregas.')
+        }
+
         const destinatariosValidos = destinatarios.filter(d => d.bloco && d.apartamento)
         if (destinatariosValidos.length === 0) {
           throw new Error('Informe pelo menos um destinatário')
@@ -231,7 +327,43 @@ export default function TodasPortas() {
     return new Date(data).toLocaleString('pt-BR')
   }
 
+  const destinosMovimentacao = (m: any): Array<{ bloco: string; apartamento: string }> => {
+    const toPairsFromJson = (value: any) => {
+      if (!value) return [] as Array<{ bloco: string; apartamento: string }>
+      if (Array.isArray(value)) {
+        return value
+          .map((d) => ({ bloco: String(d?.bloco ?? '').trim(), apartamento: String(d?.apartamento ?? '').trim() }))
+          .filter((d) => d.bloco || d.apartamento)
+      }
+      return []
+    }
+
+    const fromResumo = toPairsFromJson(m.destinatarios_resumo)
+    if (fromResumo.length > 0) return fromResumo
+
+    const fromDest = toPairsFromJson(m.destinatarios)
+    if (fromDest.length > 0) return fromDest
+
+    const blocos = String(m.bloco ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const apts = String(m.apartamento ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+
+    if (blocos.length === 0 && apts.length === 0) return []
+    if (blocos.length === apts.length && blocos.length > 0) {
+      return blocos.map((b, idx) => ({ bloco: b, apartamento: apts[idx] || '' }))
+    }
+    if (blocos.length > 0 && apts.length === 0) return blocos.map((b) => ({ bloco: b, apartamento: '' }))
+    if (apts.length > 0 && blocos.length === 0) return apts.map((a) => ({ bloco: '', apartamento: a }))
+    return [{ bloco: blocos.join(', '), apartamento: apts.join(', ') }]
+  }
+
   const getCorPorta = (porta: PortaDetalhada) => {
+    if ((porta as any)?.reservada_portaria) return 'bg-slate-500 hover:bg-slate-600 text-white'
     if (porta.status_atual === 'DISPONIVEL') return 'bg-green-500 hover:bg-green-600 text-white'
     if (porta.status_atual === 'OCUPADO') {
       // Apenas vermelho para ocupadas
@@ -264,7 +396,7 @@ export default function TodasPortas() {
 
   const portasFiltradas = portas.filter(porta => {
     if (filtro === 'todas') return true
-    if (filtro === 'disponiveis') return porta.status_atual === 'DISPONIVEL'
+    if (filtro === 'disponiveis') return porta.status_atual === 'DISPONIVEL' && !(porta as any).reservada_portaria
     if (filtro === 'ocupadas') return porta.status_atual === 'OCUPADO'
     return true
   })
@@ -335,7 +467,7 @@ export default function TodasPortas() {
           </span>
         }
         actions={
-          <div className="flex flex-wrap gap-2 items-center">
+          <div className="w-full flex flex-col sm:flex-row sm:flex-wrap gap-2 items-stretch sm:items-center">
             <button
               onClick={() => setFiltro('todas')}
               className={`px-4 py-2 rounded-xl font-semibold transition-all ${
@@ -381,7 +513,7 @@ export default function TodasPortas() {
               {consultaAberta ? (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setConsultaAberta(false)} />
-                  <div className="absolute right-0 mt-2 z-50 w-[320px] sm:w-[360px]">
+                  <div className="absolute right-0 mt-2 z-50 w-[92vw] max-w-[360px]">
                     <div className="absolute -top-2 right-5 h-4 w-4 rotate-45 bg-white/95 border border-slate-200/70 shadow" />
                     <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200/70 overflow-hidden">
                       <div className="px-4 py-3 border-b border-slate-200/70 bg-gradient-to-br from-white/80 to-slate-50/60">
@@ -511,19 +643,145 @@ export default function TodasPortas() {
             >
               {isFullScreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
+
+            <button
+              type="button"
+              onClick={() => setGrupoFocusAberto(true)}
+              className="p-2.5 rounded-xl bg-white text-gray-700 hover:bg-gray-50 transition-all border border-gray-200"
+              title="Últimas entregas"
+              aria-label="Últimas entregas"
+            >
+              <Activity size={18} />
+            </button>
           </div>
         }
       />
 
+      {portalMounted && grupoFocusAberto
+        ? createPortal(
+            <>
+              <div className="fixed inset-0 z-[9998] bg-black/30" onClick={() => setGrupoFocusAberto(false)} />
+              <div className="fixed inset-y-0 right-0 z-[9999] h-[100dvh] w-[380px] max-w-[92vw] bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden">
+                <div className="sticky top-0 px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-white/95 backdrop-blur">
+                  <div className="min-w-0">
+                    <p className="text-sm font-extrabold text-slate-900 truncate">Últimas entregas</p>
+                    <p className="text-xs text-slate-500 truncate">Movimentações recentes</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={carregarUltimasEntregas}
+                      className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                      aria-label="Atualizar"
+                      title="Atualizar"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGrupoFocusAberto(false)}
+                      className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                      aria-label="Fechar"
+                      title="Fechar"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 overflow-y-auto flex-1">
+                  {erroEntregas ? (
+                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                      {erroEntregas}
+                    </div>
+                  ) : null}
+                  {loadingEntregas ? (
+                    <div className="flex justify-center py-10">
+                      <div className="animate-spin w-7 h-7 border-4 border-sky-600 border-t-transparent rounded-full" />
+                    </div>
+                  ) : ultimasEntregas.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500">
+                      <p className="text-sm font-semibold">Nenhuma entrega recente</p>
+                      <p className="text-xs">Quando houver novas movimentações, elas aparecem aqui.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {ultimasEntregas.map((m) => (
+                        <button
+                          key={m.uid}
+                          type="button"
+                          onClick={() => {
+                            if (m.porta_uid) router.push(`/porta/${m.porta_uid}`)
+                          }}
+                          className={
+                            "w-full text-left rounded-2xl border px-4 py-3 shadow-sm " +
+                            (m.cancelado
+                              ? 'border-red-200 bg-red-50 hover:bg-red-100'
+                              : 'border-slate-200 bg-white hover:bg-slate-50')
+                          }
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-extrabold text-slate-900 truncate">
+                                Porta {m.numero_porta ?? '—'}
+                              </p>
+                              {m.cancelado ? (
+                                <p className="mt-0.5 text-[11px] font-bold text-red-700 truncate">CANCELADO</p>
+                              ) : null}
+                              {m.acao ? (
+                                <p className="mt-0.5 text-[11px] font-bold text-slate-700 truncate">Ação: {m.acao}</p>
+                              ) : null}
+                              {typeof m.comunicado_morador === 'boolean' ? (
+                                <p className="mt-0.5 text-[11px] font-bold text-slate-700 truncate">
+                                  Comunicado: {m.comunicado_morador ? 'Sim' : 'Não'}
+                                </p>
+                              ) : null}
+                              {(() => {
+                                const destinos = destinosMovimentacao(m)
+                                if (destinos.length === 0) {
+                                  return <p className="text-xs text-slate-600 truncate">Destino: —</p>
+                                }
+
+                                return (
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {destinos.map((d, idx) => (
+                                      <span
+                                        key={`${d.bloco}-${d.apartamento}-${idx}`}
+                                        className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-700"
+                                      >
+                                        {d.bloco ? `Bloco ${d.bloco}` : 'Bloco —'}
+                                        {' • '}
+                                        {d.apartamento ? `Apt ${d.apartamento}` : 'Apt —'}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )
+                              })()}
+                            </div>
+                            <div className="text-[11px] text-slate-500 whitespace-nowrap">
+                              {formatarData(m.timestamp || null)}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>,
+            document.body
+          )
+        : null}
+
       {/* Grid de Portas */}
       {loading ? (
-        <div className="grid grid-cols-10 sm:grid-cols-12 md:grid-cols-14 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
+        <div className="grid grid-cols-6 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
           {Array.from({ length: 216 }).map((_, i) => (
             <div key={i} className="aspect-square bg-gray-200 rounded-sm animate-pulse" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-10 sm:grid-cols-12 md:grid-cols-14 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
+        <div className="grid grid-cols-6 sm:grid-cols-10 md:grid-cols-12 lg:grid-cols-16 xl:grid-cols-18 gap-0.5">
           {portasFiltradas.map((porta) => (
             <div
               key={porta.uid}
@@ -563,10 +821,12 @@ export default function TodasPortas() {
               
               {/* Status do sensor */}
               {porta.sensor_ima_status && porta.sensor_ima_status === 'aberto' && (
-                <div className="absolute top-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-[6px] font-medium bg-white/90 backdrop-blur-sm">
-                  <span className={getCorStatusSensor(porta.sensor_ima_status)}>
-                    🔓
-                  </span>
+                <div className="absolute top-0.5 left-1/2 transform -translate-x-1/2 px-0.5 py-0.5 rounded text-[6px] font-medium">
+                  <AlertTriangle
+                    size={14}
+                    className="text-amber-300 drop-shadow-sm"
+                    strokeWidth={2.5}
+                  />
                 </div>
               )}
             </div>

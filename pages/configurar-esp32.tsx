@@ -436,15 +436,20 @@ export default function ConfigurarESP32() {
   // Função para testar um range de IPs
   const testarRange = async (range: string): Promise<string[]> => {
     const ipsEncontrados: string[] = []
-    const promises = []
-    
-    // Testa IPs de 1 a 254 (limitado para não sobrecarregar)
+
+    const ipsParaTestar: string[] = []
+    // Testa IPs de 1 a 50 (limitado para não sobrecarregar)
     for (let i = 1; i <= 50; i++) {
-      const ip = `${range}.${i}`
-      promises.push(testarIP(ip, ipsEncontrados))
+      ipsParaTestar.push(`${range}.${i}`)
     }
-    
-    await Promise.all(promises)
+
+    // Limitar concorrência para evitar saturar o Next (e falhas de fetch)
+    const batchSize = 5
+    for (let i = 0; i < ipsParaTestar.length; i += batchSize) {
+      const batch = ipsParaTestar.slice(i, i + batchSize)
+      await Promise.all(batch.map(ip => testarIP(ip, ipsEncontrados)))
+    }
+
     return ipsEncontrados
   }
 
@@ -452,17 +457,21 @@ export default function ConfigurarESP32() {
   const testarIP = async (ip: string, ipsEncontrados: string[]): Promise<void> => {
     try {
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 2000)
-      
-      const response = await fetch(`http://${ip}/discovery`, {
+      const timeoutId = setTimeout(() => controller.abort(), 4000)
+
+      const response = await fetch('/api/proxy/testar-discovery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip }),
         signal: controller.signal
       })
-      
+
       clearTimeout(timeoutId)
-      
+
       if (response.ok) {
-        const data = await response.json()
-        if (data.device && data.device.startsWith('AIRE-ESP32-')) {
+        const payload = await response.json().catch(() => null)
+        const data = payload?.data
+        if (payload?.success && data?.device && data.device.startsWith('AIRE-ESP32-')) {
           ipsEncontrados.push(ip)
           console.log(`[SCAN] ✅ ESP32 encontrado: ${data.device} (${ip})`)
         }
