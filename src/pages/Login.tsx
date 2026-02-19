@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useRouter } from 'next/router'
+import Link from 'next/link'
 import { Lock, Mail, Loader2, Eye, EyeOff, Package, Building2, Shield, Clock } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -263,6 +264,16 @@ export default function Login() {
                   'Entrar'
                 )}
               </button>
+
+              <div className="pt-1">
+                <Link
+                  href="/cadastro-condominio"
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-extrabold text-sm border border-white/25 bg-slate-900/5 hover:bg-slate-900/10 text-slate-800 transition-colors"
+                >
+                  <Building2 size={16} />
+                  Cadastrar condomínio
+                </Link>
+              </div>
             </form>
           </div>
 

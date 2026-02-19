@@ -23,25 +23,35 @@ export default async function handler(
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 20000) // Aumentado para 20 segundos
 
-    // Construir URL exata para log e resposta
-    const exactURL = `http://${armarioIP}/status`
-    console.log(`[PROXY] URL exata enviada: ${exactURL}`)
+    // Construir URLs candidatas (firmwares diferentes expõem endpoints diferentes)
+    const candidateUrls = [`http://${armarioIP}/status`, `http://${armarioIP}/discovery`]
 
-    const response = await fetch(exactURL, {
-      method: 'GET',
-      signal: controller.signal,
-      // Adicionar headers para melhor compatibilidade
-      headers: {
-        'User-Agent': 'GaveteiroManager/1.0',
-        'Accept': 'application/json, text/plain, */*',
-        'Connection': 'keep-alive'
-      }
-    })
+    let response: Response | null = null
+    let exactURL = ''
+
+    for (const url of candidateUrls) {
+      exactURL = url
+      console.log(`[PROXY] URL exata enviada: ${exactURL}`)
+      response = await fetch(exactURL, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'GaveteiroManager/1.0',
+          'Accept': 'application/json, text/plain, */*',
+          'Connection': 'keep-alive'
+        }
+      })
+
+      if (response.ok) break
+
+      console.log(`[PROXY] Endpoint ${exactURL} respondeu status ${response.status}`)
+    }
 
     clearTimeout(timeoutId)
 
-    if (!response.ok) {
-      throw new Error(`Armário retornou status ${response.status}`)
+    if (!response || !response.ok) {
+      const status = response?.status
+      throw new Error(`Armário retornou status ${status || 'desconhecido'}`)
     }
 
     // Tentar ler resposta do armário
@@ -68,6 +78,7 @@ export default async function handler(
       message: 'Status verificado com sucesso!',
       armarioResponse: responseData,
       exactURL: exactURL,
+      endpointUsado: exactURL,
       parsedResponse: parsedResponse
     })
 

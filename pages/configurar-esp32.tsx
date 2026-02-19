@@ -8,11 +8,12 @@ import { PageHeader } from '../components/PageHeader'
 export default function ConfigurarESP32() {
   const [ssid, setSsid] = useState('')
   const [password, setPassword] = useState('')
-  const [espIP, setEspIP] = useState('192.168.4.1')
+  const [espIP, setEspIP] = useState('')
   const [armarioIP, setArmarioIP] = useState('')  // ✅ Começa vazio, será preenchido pelo banco
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ success: boolean; message: string; exactURL?: string } | null>(null)
   const [resetResult, setResetResult] = useState<{ success: boolean; message: string; exactURL?: string } | null>(null)
+  const [ipUpdateResult, setIpUpdateResult] = useState<{ success: boolean; message: string } | null>(null)
   const [gaveteiroStatus, setGaveteiroStatus] = useState<{ modo: string; ip: string } | null>(null)
   const [checkingStatus, setCheckingStatus] = useState(false)
   const [diagnosticando, setDiagnosticando] = useState(false)
@@ -97,6 +98,38 @@ export default function ConfigurarESP32() {
     detectCurrentNetwork()
   }, [])
 
+  const atualizarIpNoBanco = async () => {
+    setIpUpdateResult(null)
+    setLoading(true)
+
+    try {
+      const condominioUid = localStorage.getItem('condominio_uid') || '7642e477-4b26-4064-8625-526ecb5e334a'
+      const response = await fetch('/api/proxy/atualizar-esp32-ip', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          condominioUid,
+          esp32Ip: armarioIP,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro ao atualizar IP')
+      }
+
+      setIpUpdateResult({ success: true, message: 'IP atualizado no banco com sucesso!' })
+    } catch (error: any) {
+      console.error('Erro ao atualizar IP do condomínio:', error)
+      setIpUpdateResult({ success: false, message: error.message || 'Erro ao atualizar IP do condomínio' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Carregar informações do condomínio e usuário
   React.useEffect(() => {
     const carregarInformacoes = async () => {
@@ -120,6 +153,8 @@ export default function ConfigurarESP32() {
             })
             // ✅ Atualizar armarioIP com o IP do banco de dados
             setArmarioIP(condominioData.esp32Ip || '192.168.1.76')
+            // ✅ Atualizar também o campo "IP do ESP32" para refletir o IP do condomínio
+            setEspIP(condominioData.esp32Ip || '192.168.1.76')
             console.log(`[CONFIG] IP do condomínio carregado: ${condominioData.esp32Ip || '192.168.1.76'}`)
           }
         } catch (error) {
@@ -130,6 +165,7 @@ export default function ConfigurarESP32() {
           })
           // ✅ Usar IP padrão também em caso de erro
           setArmarioIP('192.168.1.76')
+          setEspIP('192.168.1.76')
           console.log('[CONFIG] Usando IP padrão devido a erro: 192.168.1.76')
         }
         
@@ -336,7 +372,12 @@ export default function ConfigurarESP32() {
         }
         
         console.error(`[SYSTEM_IP] Erro ${response.status}:`, errorDetails)
-        throw new Error(`Erro ao buscar gaveteiros: ${response.status} - ${errorDetails}`)
+
+        setStatusResponse(
+          `❌ Não foi possível buscar gaveteiros na URL informada (HTTP ${response.status}). ` +
+            `Você pode preencher o IP manualmente (ex: 192.168.1.82) ou usar o scan de rede.`
+        )
+        return []
       }
       
       const data = await response.json()
@@ -366,16 +407,23 @@ export default function ConfigurarESP32() {
       console.error('[SYSTEM_IP] Erro ao buscar IPs do sistema:', error)
       
       // Se já for um erro tratado, repassa
-      if (error.message.includes('Erro ao buscar gaveteiros')) {
-        throw error
+      if (typeof error?.message === 'string' && error.message.includes('Erro ao buscar gaveteiros')) {
+        setStatusResponse(
+          `❌ Erro ao buscar IPs do sistema. Preencha o IP manualmente (ex: 192.168.1.82) ou use o scan de rede.`
+        )
+        return []
       }
       
       // Erros de rede/conexão
       if (error.name === 'TypeError' && error.message.includes('fetch')) {
-        throw new Error('Erro de conexão com o proxy. Verifique se o servidor está online.')
+        setStatusResponse(
+          '❌ Erro de conexão ao buscar IPs do sistema. Verifique se o servidor está online ou use o scan de rede.'
+        )
+        return []
       }
-      
-      throw new Error(`Erro inesperado: ${error.message}`)
+
+      setStatusResponse('❌ Erro inesperado ao buscar IPs do sistema. Use o scan de rede ou preencha o IP manualmente.')
+      return []
     }
   }
 
@@ -853,7 +901,7 @@ export default function ConfigurarESP32() {
     setStatusResponse('Executando diagnóstico completo...')
     
     try {
-      const resultado = await diagnosticarProblema(armarioIP)
+      const resultado = await diagnosticarProblema(espIP)
       setDiagnostico(resultado)
       setStatusResponse(`Diagnóstico: ${resultado.problema}`)
       
@@ -888,7 +936,7 @@ export default function ConfigurarESP32() {
 
     try {
       // Primeiro verificar conectividade básica
-      const connectivityResult = await verificarConectividadeBasica(armarioIP)
+      const connectivityResult = await verificarConectividadeBasica(espIP)
       console.log(`[CONNECTIVITY] Resultado:`, connectivityResult)
       
       if (!connectivityResult.online) {
@@ -909,7 +957,7 @@ export default function ConfigurarESP32() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          armarioIP: armarioIP
+          armarioIP: espIP
         }),
         signal: controller.signal
       })
@@ -1011,7 +1059,20 @@ export default function ConfigurarESP32() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Erro ao resetar WiFi')
+        const status = response.status
+        const apiMsg = data?.error || data?.message || 'Erro ao resetar WiFi'
+
+        const msg =
+          status === 404
+            ? 'Este firmware não suporta reset de WiFi via endpoint /reset-wifi. Regrave o firmware com suporte a reset/config ou configure o WiFi manualmente.'
+            : apiMsg
+
+        setResetResult({
+          success: false,
+          message: msg,
+          exactURL: data?.exactURL
+        })
+        return
       }
 
       setResetResult({ 
@@ -1261,7 +1322,11 @@ export default function ConfigurarESP32() {
                         type="text"
                         id="espIP"
                         value={espIP}
-                        onChange={(e) => setEspIP(e.target.value)}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setEspIP(next)
+                          setArmarioIP(next)
+                        }}
                         className="pl-10 block w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                         placeholder="192.168.4.1"
                         required
@@ -1511,18 +1576,34 @@ export default function ConfigurarESP32() {
                   <label htmlFor="armarioIP" className="block text-sm font-medium text-gray-700">
                     IP do Armário
                   </label>
-                  <input
-                    type="text"
-                    id="armarioIP"
-                    value={armarioIP}
-                    onChange={(e) => setArmarioIP(e.target.value)}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="192.168.1.76"
-                    required
-                  />
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      type="text"
+                      id="armarioIP"
+                      value={armarioIP}
+                      onChange={(e) => setArmarioIP(e.target.value)}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="192.168.1.76"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={atualizarIpNoBanco}
+                      disabled={loading || !armarioIP.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 whitespace-nowrap"
+                      title="Atualizar coluna esp32_ip no banco"
+                    >
+                      Atualizar IP
+                    </button>
+                  </div>
                   <p className="mt-1 text-xs text-gray-500">
                     IP do ESP32 já configurado na rede do condomínio
                   </p>
+                  {ipUpdateResult && (
+                    <p className={`mt-2 text-sm ${ipUpdateResult.success ? 'text-green-700' : 'text-red-700'}`}>
+                      {ipUpdateResult.message}
+                    </p>
+                  )}
                 </div>
 
                 {/* Botão de reset */}

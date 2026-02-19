@@ -17,6 +17,43 @@ export default function CadastroCondominioPublicoPage() {
   const [esp32Ip, setEsp32Ip] = useState('192.168.1.76')
   const [storage, setStorage] = useState('')
 
+  const titleCase = (value: string) => {
+    const cleaned = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (!cleaned) return ''
+    return cleaned
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ')
+  }
+
+  const onlyDigits = (value: string) => String(value || '').replace(/\D/g, '')
+
+  const formatCpfCnpj = (value: string) => {
+    const digits = onlyDigits(value).slice(0, 14)
+    if (!digits) return ''
+    if (digits.length <= 11) {
+      const p1 = digits.slice(0, 3)
+      const p2 = digits.slice(3, 6)
+      const p3 = digits.slice(6, 9)
+      const p4 = digits.slice(9, 11)
+      return [p1, p2, p3].filter(Boolean).join('.') + (p4 ? `-${p4}` : '')
+    }
+
+    const p1 = digits.slice(0, 2)
+    const p2 = digits.slice(2, 5)
+    const p3 = digits.slice(5, 8)
+    const p4 = digits.slice(8, 12)
+    const p5 = digits.slice(12, 14)
+    return [p1, p2, p3].filter(Boolean).join('.') + (p4 ? `/${p4}` : '') + (p5 ? `-${p5}` : '')
+  }
+
+  const sanitizeStorage = (value: string) => {
+    const raw = String(value || '').toLowerCase()
+    const cleaned = raw.replace(/[^a-z0-9-]/g, '')
+    return cleaned
+  }
+
   const salvar = async () => {
     setError('')
     setSuccessUid('')
@@ -28,19 +65,20 @@ export default function CadastroCondominioPublicoPage() {
 
     setSaving(true)
     try {
+      const documentoDigits = onlyDigits(documento)
       const res = await fetch('/api/public/cadastrar-condominio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           nome,
           nome_fantasia: nomeFantasia,
-          documento,
+          documento: documentoDigits,
           descricao,
           senha_mestre: senhaMestre,
           wifi_login: wifiLogin,
           wifi_senha: wifiSenha,
           esp32_ip: esp32Ip,
-          storage
+          storage: sanitizeStorage(storage)
         })
       })
 
@@ -127,7 +165,7 @@ export default function CadastroCondominioPublicoPage() {
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Nome *</label>
                   <input
                     value={nome}
-                    onChange={(e) => setNome(e.target.value)}
+                    onChange={(e) => setNome(e.target.value.toUpperCase())}
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     placeholder="Nome do condomínio"
                     disabled={saving}
@@ -138,7 +176,7 @@ export default function CadastroCondominioPublicoPage() {
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Nome fantasia</label>
                   <input
                     value={nomeFantasia}
-                    onChange={(e) => setNomeFantasia(e.target.value)}
+                    onChange={(e) => setNomeFantasia(titleCase(e.target.value))}
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     placeholder="Opcional"
                     disabled={saving}
@@ -149,7 +187,7 @@ export default function CadastroCondominioPublicoPage() {
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Documento</label>
                   <input
                     value={documento}
-                    onChange={(e) => setDocumento(e.target.value)}
+                    onChange={(e) => setDocumento(formatCpfCnpj(e.target.value))}
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     placeholder="CNPJ/CPF (opcional)"
                     disabled={saving}
@@ -160,7 +198,7 @@ export default function CadastroCondominioPublicoPage() {
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Storage (bucket)</label>
                   <input
                     value={storage}
-                    onChange={(e) => setStorage(e.target.value)}
+                    onChange={(e) => setStorage(sanitizeStorage(e.target.value))}
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     placeholder="Ex: aire-storage"
                     disabled={saving}
@@ -171,7 +209,7 @@ export default function CadastroCondominioPublicoPage() {
                   <label className="block text-sm font-semibold text-slate-700 mb-1">Descrição</label>
                   <textarea
                     value={descricao}
-                    onChange={(e) => setDescricao(e.target.value)}
+                    onChange={(e) => setDescricao(e.target.value.toUpperCase())}
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
                     placeholder="Opcional"
                     rows={3}

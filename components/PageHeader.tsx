@@ -10,6 +10,9 @@ type PageHeaderProps = {
   leftAction?: ReactNode
   sticky?: boolean
   showBack?: boolean
+  backTo?: string
+  borderless?: boolean
+  borderTone?: 'light' | 'medium'
 }
 
 export function PageHeader({
@@ -19,7 +22,10 @@ export function PageHeader({
   actions,
   leftAction,
   sticky = true,
-  showBack = true
+  showBack = true,
+  backTo,
+  borderless = false,
+  borderTone = 'light'
 }: PageHeaderProps) {
   const router = useRouter()
 
@@ -28,7 +34,7 @@ export function PageHeader({
     (showBack ? (
       <button
         type="button"
-        onClick={() => router.back()}
+        onClick={() => backTo ? router.push(backTo) : router.back()}
         className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
         aria-label="Voltar"
       >
@@ -38,8 +44,29 @@ export function PageHeader({
 
   return (
     <div className={sticky ? 'sticky top-0 z-30' : ''}>
-      <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-gray-100 overflow-visible">
-        <div className={sticky ? 'p-4 sm:p-5 border-b border-gray-100/70' : 'p-4 sm:p-5'}>
+      <div
+        className={
+          'bg-white/80 backdrop-blur-sm rounded-2xl overflow-visible ' +
+          (borderless
+            ? ''
+            : borderTone === 'medium'
+              ? 'border border-slate-200/90'
+              : 'border border-gray-100')
+        }
+      >
+        <div
+          className={
+            sticky
+              ? `p-4 sm:p-5 ${
+                  borderless
+                    ? ''
+                    : borderTone === 'medium'
+                      ? 'border-b border-slate-200/70'
+                      : 'border-b border-gray-100/70'
+                }`
+              : 'p-4 sm:p-5'
+          }
+        >
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
               {resolvedLeftAction}

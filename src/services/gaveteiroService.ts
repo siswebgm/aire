@@ -1,5 +1,16 @@
 import { supabase } from '../lib/supabaseClient'
-import type { Condominio, Gaveteiro, Porta, MovimentacaoPorta, ResumoPortas, Morador, Bloco, Apartamento } from '../types/gaveteiro'
+import type {
+  Condominio,
+  Gaveteiro,
+  Porta,
+  MovimentacaoPorta,
+  ResumoPortas,
+  Morador,
+  Bloco,
+  Apartamento,
+  AguaLeitura,
+  AguaLancamentoItem
+} from '../types/gaveteiro'
 
 // ============================================
 // NOMES DAS TABELAS (schema cobrancas com prefixo gvt_)
@@ -17,7 +28,15 @@ const TABLES = {
   apartamentos: 'gvt_apartamentos',
   iot_dispositivos: 'gvt_iot_dispositivos',
   iot_comandos: 'gvt_iot_comandos',
-  iot_status: 'gvt_iot_status'
+  iot_status: 'gvt_iot_status',
+  agua_leituras: 'gvt_agua_leituras'
+}
+
+function toMonthRef(value: string | Date): string {
+  const d = typeof value === 'string' ? new Date(value) : value
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}-01`
 }
 
 // ============================================
@@ -37,6 +56,158 @@ export async function listarCondominios(): Promise<Condominio[]> {
   }
 
   return data || []
+}
+
+export async function obterTarifaAguaCondominio(condominioUid: string): Promise<number | null> {
+  const { data, error } = await supabase
+    .from(TABLES.condominios)
+    .select('tarifa_agua_m3')
+    .eq('uid', condominioUid)
+    .single()
+
+  if (error) {
+    const code = (error as any)?.code
+    if (code === '42703') {
+      return null
+    }
+    console.error('Erro ao obter tarifa de água:', error)
+    throw error
+  }
+
+  const t = data?.tarifa_agua_m3
+  if (t === null || t === undefined) return null
+  const n = Number(t)
+  return Number.isFinite(n) ? n : null
+}
+
+export async function listarLeiturasAguaMes(
+  condominioUid: string,
+  referenciaMes: string,
+  blocoUid?: string
+): Promise<AguaLeitura[]> {
+  const ref = toMonthRef(referenciaMes)
+  let query = supabase
+    .from(TABLES.agua_leituras)
+    .select('*')
+    .eq('condominio_uid', condominioUid)
+    .eq('referencia_mes', ref)
+    .eq('ativo', true)
+
+  if (blocoUid) {
+    query = query.eq('bloco_uid', blocoUid)
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: true })
+
+  if (error) {
+    console.error('Erro ao listar leituras de água:', error)
+    throw error
+  }
+
+  return (data || []) as any
+}
+
+export async function obterUltimasLeiturasAguaPorApartamentos(
+  condominioUid: string,
+  apartamentoUids: string[],
+  referenciaMes: string,
+  blocoUid?: string
+): Promise<Record<string, AguaLeitura | null>> {
+  const out: Record<string, AguaLeitura | null> = {}
+  apartamentoUids.forEach((uid) => {
+    out[uid] = null
+  })
+
+  if (!apartamentoUids.length) return out
+
+  const ref = new Date(toMonthRef(referenciaMes))
+  ref.setMonth(ref.getMonth() - 1)
+  const refPrev = toMonthRef(ref)
+
+  const chunkSize = 50
+  for (let i = 0; i < apartamentoUids.length; i += chunkSize) {
+    const chunk = apartamentoUids.slice(i, i + chunkSize)
+
+    let query = supabase
+      .from(TABLES.agua_leituras)
+      .select('*')
+      .eq('condominio_uid', condominioUid)
+      .eq('referencia_mes', refPrev)
+      .in('apartamento_uid', chunk)
+      .eq('ativo', true)
+
+    if (blocoUid) {
+      query = query.eq('bloco_uid', blocoUid)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Erro ao obter últimas leituras de água:', error)
+      throw error
+    }
+
+    ;(data || []).forEach((row: any) => {
+      if (row?.apartamento_uid) {
+        out[String(row.apartamento_uid)] = row as AguaLeitura
+      }
+    })
+  }
+
+  return out
+}
+
+export async function salvarLeiturasAgua(
+  condominioUid: string,
+  itens: AguaLancamentoItem[],
+  tarifaM3: number
+): Promise<AguaLeitura[]> {
+  if (!itens.length) return []
+  const ref = toMonthRef(itens[0].referencia_mes)
+
+  const apartamentoUids = itens.map((i) => i.apartamento_uid)
+  const ultimas = await obterUltimasLeiturasAguaPorApartamentos(condominioUid, apartamentoUids, ref)
+
+  const payload = itens.map((i) => {
+    const last = ultimas[i.apartamento_uid]
+    const leituraAnterior = last?.leitura_atual ?? null
+    if (leituraAnterior !== null && i.leitura_atual < leituraAnterior) {
+      throw new Error('Leitura atual não pode ser menor que a leitura anterior')
+    }
+    const consumo = leituraAnterior === null ? null : i.leitura_atual - leituraAnterior
+    const valor = consumo === null ? null : Number((consumo * tarifaM3).toFixed(2))
+
+    return {
+      condominio_uid: condominioUid,
+      apartamento_uid: i.apartamento_uid,
+      bloco_uid: i.bloco_uid || null,
+      referencia_mes: toMonthRef(i.referencia_mes),
+      leitura_atual: i.leitura_atual,
+      leitura_anterior: leituraAnterior,
+      consumo,
+      tarifa_m3: tarifaM3,
+      valor,
+      foto_url: i.foto_url || null,
+      foto_path: i.foto_path || null,
+      observacao: i.observacao || null,
+      ativo: true,
+      updated_at: new Date().toISOString()
+    }
+  })
+
+  const { data, error } = await supabase
+    .from(TABLES.agua_leituras)
+    .upsert(payload, {
+      onConflict: 'condominio_uid,apartamento_uid,referencia_mes'
+    })
+    .select('*')
+
+  if (error) {
+    console.error('Erro ao salvar leituras de água:', error)
+    throw error
+  }
+
+  return (data || []) as any
 }
 
 // ============================================
@@ -119,6 +290,8 @@ export async function listarPortas(gaveteiroUid: string): Promise<Porta[]> {
 }
 
 export async function listarTodasPortas(condominioUid: string): Promise<Porta[]> {
+  console.log('🔍 [SERVICE] Buscando portas para condomínio:', condominioUid)
+  
   const { data, error } = await supabase
     .from(TABLES.portas)
     .select('*')
@@ -127,8 +300,20 @@ export async function listarTodasPortas(condominioUid: string): Promise<Porta[]>
     .order('numero_porta', { ascending: true })
 
   if (error) {
-    console.error('Erro ao listar todas as portas:', error)
+    console.error('❌ [SERVICE] Erro ao listar todas as portas:', error)
     throw error
+  }
+  
+  console.log('✅ [SERVICE] Portas encontradas:', data?.length || 0)
+  
+  // 🔍 VERIFICAÇÃO DE SEGURANÇA: Log dos primeiros registros
+  if (data && data.length > 0) {
+    console.log('🔍 [SERVICE] Amostra das portas:', data.slice(0, 3).map(p => ({
+      uid: p.uid,
+      numero: p.numero_porta,
+      condominio_uid: p.condominio_uid,
+      matches: p.condominio_uid === condominioUid
+    })))
   }
   
   return data || []
@@ -460,14 +645,18 @@ export async function listarMovimentacoes(portaUid: string, limite: number = 50)
 
 export async function listarUltimasEntregas(
   condominioUid: string,
-  limite: number = 20
+  limite: number = 20,
+  opts?: { from?: string; to?: string }
 ): Promise<MovimentacaoPorta[]> {
-  const { data, error } = await supabase
+  let q = supabase
     .from(TABLES.movimentacoes_porta)
     .select('*')
     .eq('condominio_uid', condominioUid)
-    .order('timestamp', { ascending: false })
-    .limit(limite)
+
+  if (opts?.from) q = q.gte('timestamp', opts.from)
+  if (opts?.to) q = q.lte('timestamp', opts.to)
+
+  const { data, error } = await q.order('timestamp', { ascending: false }).limit(limite)
 
   if (error) {
     console.error('Erro ao listar últimas entregas:', error)
@@ -501,7 +690,9 @@ export interface OcuparPortaResult {
   compartilhada: boolean
 }
 
-export async function ocuparPortaViaApi(params: OcuparPortaParams): Promise<{ sucesso: boolean; senhas: SenhaDestinatario[] }> {
+export async function ocuparPortaViaApi(
+  params: OcuparPortaParams
+): Promise<{ sucesso: boolean; senhas: SenhaDestinatario[]; error?: string }> {
   const resp = await fetch('/api/portas/ocupar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -511,7 +702,7 @@ export async function ocuparPortaViaApi(params: OcuparPortaParams): Promise<{ su
   const data = await resp.json().catch(() => null)
   if (!resp.ok) {
     const msg = data?.error || data?.message || 'Erro ao ocupar porta'
-    throw new Error(msg)
+    return { sucesso: false, senhas: [], error: msg }
   }
 
   return data
@@ -587,7 +778,7 @@ export async function ocuparPorta(params: OcuparPortaParams): Promise<OcuparPort
   await registrarMovimentacao(
     portaUid,
     condominioUid,
-    'OCUPAR',
+    'OCUPADO',
     'OCUPADO',
     usuarioUid,
     'WEB',

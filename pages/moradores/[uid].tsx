@@ -63,6 +63,7 @@ export default function MoradorDetalhesPage() {
   const router = useRouter()
   const uid = typeof router.query.uid === 'string' ? router.query.uid : ''
   const print = router.query.print === '1'
+  const autoPrint = router.query.autoprint === '1'
 
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
@@ -91,7 +92,10 @@ export default function MoradorDetalhesPage() {
   const [facialQuality, setFacialQuality] = useState<{ ok: boolean; message: string } | null>(null)
   const [facialRemovida, setFacialRemovida] = useState(false)
 
+  const [gerandoPdf, setGerandoPdf] = useState(false)
+
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const fichaPrintRef = useRef<HTMLDivElement | null>(null)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState<string>('')
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -151,6 +155,7 @@ export default function MoradorDetalhesPage() {
 
   useEffect(() => {
     if (!print) return
+    if (!autoPrint) return
     if (loading) return
     if (!morador) return
     const t = window.setTimeout(() => {
@@ -527,6 +532,193 @@ export default function MoradorDetalhesPage() {
     )
   }
 
+  if (print) {
+    return (
+      <>
+        <Head>
+          <title>Ficha do Morador - AIRE</title>
+          <meta name="description" content="Ficha do morador" />
+        </Head>
+
+        <div className="min-h-screen bg-slate-50 flex items-start justify-center p-4 sm:p-8">
+          <div className="w-full max-w-2xl">
+            <div className="print:hidden mb-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (gerandoPdf) return
+                  const el = fichaPrintRef.current
+                  if (!el) return
+                  setGerandoPdf(true)
+                  try {
+                    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+                      import('html2canvas'),
+                      import('jspdf')
+                    ])
+
+                    const canvas = await html2canvas(el, {
+                      scale: 2,
+                      backgroundColor: '#ffffff',
+                      useCORS: true
+                    })
+
+                    const imgData = canvas.toDataURL('image/png')
+                    const pdf = new jsPDF({
+                      orientation: 'p',
+                      unit: 'mm',
+                      format: 'a4'
+                    })
+
+                    const pageWidth = pdf.internal.pageSize.getWidth()
+                    const pageHeight = pdf.internal.pageSize.getHeight()
+                    const imgProps = pdf.getImageProperties(imgData)
+                    const imgWidth = pageWidth
+                    const imgHeight = (imgProps.height * imgWidth) / imgProps.width
+
+                    let y = 0
+                    let remaining = imgHeight
+
+                    while (remaining > 0) {
+                      pdf.addImage(imgData, 'PNG', 0, y, imgWidth, imgHeight)
+                      remaining -= pageHeight
+                      if (remaining > 0) {
+                        pdf.addPage()
+                        y -= pageHeight
+                      }
+                    }
+
+                    const nomeArquivoBase = (morador?.nome ? String(morador.nome) : 'morador')
+                      .trim()
+                      .toLowerCase()
+                      .replace(/[^a-z0-9\-\s]/g, '')
+                      .replace(/\s+/g, '-')
+                      .slice(0, 80)
+
+                    pdf.save(`ficha-${nomeArquivoBase || 'morador'}.pdf`)
+                  } catch (err) {
+                    console.error('Erro ao gerar PDF do morador:', err)
+                    setToast({ type: 'error', message: 'Não foi possível gerar o PDF.' })
+                  } finally {
+                    setGerandoPdf(false)
+                  }
+                }}
+                className="h-10 px-4 rounded-xl font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60"
+                disabled={gerandoPdf || loading || !morador}
+              >
+                {gerandoPdf ? 'Gerando PDF...' : 'Baixar PDF'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    window.print()
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className="h-10 px-4 rounded-xl font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50"
+              >
+                Imprimir
+              </button>
+            </div>
+
+            <div ref={fichaPrintRef} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-6 py-6 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase">
+                      Ficha do Morador
+                    </div>
+                    <div className="mt-2 text-[28px] font-extrabold text-slate-900 leading-[1.15] break-words pr-2">
+                      {morador?.nome || '—'}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-100 text-xs font-bold text-blue-700">
+                        Bloco: {blocoLabel}
+                      </span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-100 text-xs font-bold text-emerald-700">
+                        Apto: {aptLabel}
+                      </span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700">
+                        {morador?.tipo === 'PROPRIETARIO' ? 'Proprietário' : 'Inquilino'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {morador?.facial_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={String((morador as any).facial_url)}
+                      alt="Facial"
+                      className="w-20 h-20 rounded-2xl border border-slate-200 object-cover"
+                    />
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="px-6 py-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Email</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {morador?.email ? String(morador.email) : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">WhatsApp</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {morador?.whatsapp ? String(morador.whatsapp) : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Condomínio</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {condominio?.nome ? String(condominio.nome) : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">UID</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-all">
+                      {morador?.uid ? String(morador.uid) : '—'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                  <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Contatos adicionais</div>
+                  <div className="mt-2 space-y-2">
+                    {contatosAdicionais.length > 0 ? (
+                      contatosAdicionais.map((c, idx) => (
+                        <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1.2fr_1fr_1.2fr] gap-2">
+                          <div className="text-sm font-semibold text-slate-900 break-words">{c.nome || '—'}</div>
+                          <div className="text-sm text-slate-700 break-words">{c.whatsapp || '—'}</div>
+                          <div className="text-sm text-slate-700 break-words">{c.email || '—'}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-slate-500">—</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                  <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Observações</div>
+                  <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap break-words">
+                    {observacao ? observacao : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    )
+  }
+
   return (
     <MainLayout>
       <>
@@ -554,6 +746,7 @@ export default function MoradorDetalhesPage() {
           <PageHeader
             title={morador?.nome ? morador.nome : 'Morador'}
             sticky={false}
+            backTo="/moradores"
             subtitle={
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 border border-blue-100">

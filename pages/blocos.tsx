@@ -84,7 +84,7 @@ export default function BlocosPage() {
       map.set(key, curr)
     }
 
-    for (const [key, arr] of map.entries()) {
+    for (const [key, arr] of Array.from(map.entries())) {
       arr.sort((a, b) => a.numero.localeCompare(b.numero, undefined, { numeric: true }))
       map.set(key, arr)
     }
@@ -138,13 +138,31 @@ export default function BlocosPage() {
     )
   }
 
-  if (!condominio) {
+  if (!condominio || loading) {
     return (
       <MainLayout>
-        <div className="w-full py-10 text-center">
-          <div className="inline-flex items-center gap-3 text-gray-600">
-            <div className="h-5 w-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
-            <span>Carregando...</span>
+        <div className="w-full">
+          <div className="animate-pulse">
+            <div className="h-16 bg-slate-200 rounded-2xl mb-4" />
+            <div className="h-12 bg-slate-200 rounded-2xl mb-4" />
+            <div className="space-y-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl border border-slate-200 p-6">
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="w-11 h-11 bg-slate-200 rounded-xl" />
+                    <div className="flex-1">
+                      <div className="h-5 bg-slate-200 rounded w-32 mb-2" />
+                      <div className="h-4 bg-slate-200 rounded w-48" />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {Array.from({ length: 12 }).map((_, j) => (
+                      <div key={j} className="w-12 h-10 bg-slate-200 rounded" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </MainLayout>
@@ -228,13 +246,7 @@ export default function BlocosPage() {
               </div>
             </div>
 
-            {loading ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center">
-                <Loader2 size={32} className="animate-spin mx-auto text-sky-600" />
-                <p className="mt-2 text-slate-500">Carregando...</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
+            <div className="space-y-4">
                 {blocosVisiveis.filter(matchBloco).map((bloco) => {
                   const aptsDoBloco = (apartamentosPorBloco.get(bloco.uid) || []).filter((a) => matchApartamento(a, bloco))
                   const aptsComMorador = aptsDoBloco.filter((a) => getMoradorDoApartamento(bloco, a.numero)).length
@@ -295,8 +307,7 @@ export default function BlocosPage() {
                     <p className="text-slate-500">Nenhum bloco/apartamento cadastrado</p>
                   </div>
                 ) : null}
-              </div>
-            )}
+            </div>
           </div>
         </div>
 

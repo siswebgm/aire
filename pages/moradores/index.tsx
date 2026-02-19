@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { AlertTriangle, MoreVertical, Plus, Printer, Search, Trash2, Phone, Building2, Home, Users, X } from 'lucide-react'
@@ -37,6 +37,10 @@ export default function MoradoresIndexPage() {
   const [moradorParaDeletar, setMoradorParaDeletar] = useState<Morador | null>(null)
   const [deletando, setDeletando] = useState(false)
 
+  const [moradorPdf, setMoradorPdf] = useState<Morador | null>(null)
+  const [gerandoPdfUid, setGerandoPdfUid] = useState<string | null>(null)
+  const fichaPdfRef = useRef<HTMLDivElement | null>(null)
+
   useEffect(() => {
     if (!condominio?.uid) return
     void carregar()
@@ -53,6 +57,77 @@ export default function MoradoresIndexPage() {
       console.error('Erro ao carregar moradores:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const gerarPdfMorador = async (m: Morador) => {
+    if (!condominio?.uid) return
+    if (!m?.uid) return
+    if (gerandoPdfUid) return
+
+    setGerandoPdfUid(m.uid)
+    setMoradorPdf(m)
+
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve())
+    })
+
+    const el = fichaPdfRef.current
+    if (!el) {
+      setGerandoPdfUid(null)
+      return
+    }
+
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf')
+      ])
+
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true
+      })
+
+      const imgData = canvas.toDataURL('image/png')
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4'
+      })
+
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const imgProps = pdf.getImageProperties(imgData)
+      const imgWidth = pageWidth
+      const imgHeight = (imgProps.height * imgWidth) / imgProps.width
+
+      let y = 0
+      let remaining = imgHeight
+      while (remaining > 0) {
+        pdf.addImage(imgData, 'PNG', 0, y, imgWidth, imgHeight)
+        remaining -= pageHeight
+        if (remaining > 0) {
+          pdf.addPage()
+          y -= pageHeight
+        }
+      }
+
+      const nomeArquivoBase = (m?.nome ? String(m.nome) : 'morador')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\-\s]/g, '')
+        .replace(/\s+/g, '-')
+        .slice(0, 80)
+
+      pdf.save(`ficha-${nomeArquivoBase || 'morador'}.pdf`)
+    } catch (err) {
+      console.error('Erro ao gerar PDF do morador:', err)
+      alert('Não foi possível gerar o PDF do morador')
+    } finally {
+      setGerandoPdfUid(null)
+      setMoradorPdf(null)
     }
   }
 
@@ -122,6 +197,100 @@ export default function MoradoresIndexPage() {
           <title>Moradores - AIRE</title>
           <meta name="description" content="Listagem de moradores" />
         </Head>
+
+        {moradorPdf ? (
+          <div
+            style={{ left: -99999, top: 0 }}
+            className="fixed z-[-1] w-[794px] pointer-events-none opacity-0"
+            aria-hidden="true"
+          >
+            <div ref={fichaPdfRef} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-6 py-6 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase">Ficha do Morador</div>
+                    <div className="mt-2 text-[28px] font-extrabold text-slate-900 leading-[1.15] break-words pr-2">
+                      {moradorPdf.nome || '—'}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-100 text-xs font-bold text-blue-700">
+                        Bloco: {moradorPdf.bloco ? String(moradorPdf.bloco) : '—'}
+                      </span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-100 text-xs font-bold text-emerald-700">
+                        Apto: {moradorPdf.apartamento ? String(moradorPdf.apartamento) : '—'}
+                      </span>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700">
+                        {moradorPdf.tipo === 'PROPRIETARIO' ? 'Proprietário' : 'Inquilino'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {(moradorPdf as any)?.facial_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={String((moradorPdf as any).facial_url)}
+                      alt="Facial"
+                      className="w-20 h-20 rounded-2xl border border-slate-200 object-cover"
+                    />
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="px-6 py-6">
+                <div className="grid grid-cols-2 gap-5">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Email</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {moradorPdf.email ? String(moradorPdf.email) : '—'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">WhatsApp</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {moradorPdf.whatsapp ? String(moradorPdf.whatsapp) : '—'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Condomínio</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-words">
+                      {condominio?.nome ? String(condominio.nome) : '—'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">UID</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900 break-all">{String(moradorPdf.uid)}</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                  <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Contatos adicionais</div>
+                  <div className="mt-2 space-y-2">
+                    {(() => {
+                      const contatos = normalizeContatosAdicionais((moradorPdf as any).contatos_adicionais)
+                      if (!contatos.length) {
+                        return <div className="text-sm text-slate-500">—</div>
+                      }
+                      return contatos.map((c, idx) => (
+                        <div key={idx} className="grid grid-cols-[1.2fr_1fr_1.2fr] gap-2">
+                          <div className="text-sm font-semibold text-slate-900 break-words">{c.nome || '—'}</div>
+                          <div className="text-sm text-slate-700 break-words">{c.whatsapp || '—'}</div>
+                          <div className="text-sm text-slate-700 break-words">{c.email || '—'}</div>
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                  <div className="text-xs font-extrabold tracking-widest text-slate-400 uppercase">Observações</div>
+                  <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap break-words">
+                    {(moradorPdf as any)?.observacao ? String((moradorPdf as any).observacao) : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="w-full">
           <PageHeader
@@ -236,7 +405,7 @@ export default function MoradoresIndexPage() {
                 <p className="text-sm text-gray-500 mt-1">Tente ajustar a busca ou cadastre um novo morador.</p>
               </div>
             ) : (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-gray-100 overflow-visible">
                 <div className="hidden md:grid grid-cols-12 gap-3 px-4 sm:px-5 py-3 bg-slate-50/70 border-b border-slate-200/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                   <div className="col-span-1">Foto</div>
                   <div className="col-span-4">Nome</div>
@@ -365,12 +534,13 @@ export default function MoradoresIndexPage() {
                                         type="button"
                                         onClick={() => {
                                           setMenuUid(null)
-                                          window.open(`/moradores/${m.uid}?print=1`, '_blank')
+                                          void gerarPdfMorador(m)
                                         }}
                                         className="w-full flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                                        disabled={!!gerandoPdfUid}
                                       >
                                         <Printer size={16} className="text-slate-500" />
-                                        Imprimir
+                                        {gerandoPdfUid === m.uid ? 'Gerando PDF...' : 'Imprimir'}
                                       </button>
                                       <button
                                         type="button"

@@ -168,3 +168,32 @@ export interface Apartamento {
   // Join
   bloco?: Bloco
 }
+
+export interface AguaLeitura {
+  uid: string
+  condominio_uid: string
+  apartamento_uid: string
+  bloco_uid?: string
+  referencia_mes: string
+  leitura_atual: number
+  leitura_anterior?: number | null
+  consumo?: number | null
+  tarifa_m3?: number | null
+  valor?: number | null
+  foto_url?: string | null
+  foto_path?: string | null
+  observacao?: string | null
+  ativo: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AguaLancamentoItem {
+  apartamento_uid: string
+  bloco_uid?: string
+  referencia_mes: string
+  leitura_atual: number
+  foto_url?: string
+  foto_path?: string
+  observacao?: string
+}

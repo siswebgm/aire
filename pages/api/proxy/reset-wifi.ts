@@ -41,7 +41,27 @@ export default async function handler(
     clearTimeout(timeoutId)
 
     if (!response.ok) {
-      throw new Error(`Armário retornou status ${response.status}`)
+      let body = ''
+      try {
+        body = await response.text()
+      } catch {
+        body = ''
+      }
+
+      const status = response.status
+
+      const hint =
+        status === 404
+          ? 'O endpoint /reset-wifi não existe nesse firmware. Atualize o firmware ou use outra forma de configurar WiFi.'
+          : undefined
+
+      return res.status(status).json({
+        error: `Armário retornou status ${status}`,
+        message: hint || `Armário retornou status ${status}`,
+        status,
+        exactURL,
+        armarioResponse: body.substring(0, 500)
+      })
     }
 
     // Tentar ler resposta do armário

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next'
-import { supabase } from '../../../src/lib/supabaseClient'
+import { supabaseServer } from '../../../lib/server/supabase'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'condominioUid e numeroPorta são obrigatórios' })
     }
 
-    const { data: porta, error: portaError } = await supabase
+    const { data: porta, error: portaError } = await supabaseServer
       .from('gvt_portas')
       .select('uid')
       .eq('condominio_uid', condominioUid)
@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const now = new Date().toISOString()
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseServer
       .from('gvt_portas')
       .update({
         sensor_ima_status: 'fechado',

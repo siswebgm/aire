@@ -24,6 +24,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(result)
   } catch (error: any) {
     console.error('Erro ao ocupar porta:', error)
-    return res.status(500).json({ error: error.message || 'Erro ao ocupar porta' })
+
+    const msg = error?.message || 'Erro ao ocupar porta'
+    const isMoradorValidation =
+      typeof msg === 'string' &&
+      (msg.startsWith('Não existe morador cadastrado') || msg.startsWith('Não existem moradores cadastrados'))
+
+    return res.status(isMoradorValidation ? 400 : 500).json({ error: msg })
   }
 }

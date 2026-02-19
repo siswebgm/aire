@@ -1,53 +1,30 @@
 #include <WiFi.h>
 #include <WebServer.h>
- #include <WiFiUdp.h>
- #include "mbedtls/sha256.h"
- #include "esp_task_wdt.h"
+#include <WiFiUdp.h>
+#include <Preferences.h>
+#include "mbedtls/sha256.h"
 
 /* =====================================================
-   ESP32 SIMPLES - SEM MCP23017
-   Portas direto no ESP32 + DHCP + Descoberta Automática
+   CONFIGURAÇÕES
    ===================================================== */
 
-// Token SHA256
 #define AIRE_ESP_SECRET "AIRE_2025_SUPER_SECRETO"
-#define WIFI_RESET_TOKEN "8433135"
-#define MAX_TENTATIVAS_WIFI 3
-#define TIMEOUT_WIFI 10000
-#define INTERVALO_VERIFICACAO_WIFI 30000
-#define INTERVALO_LOG_SISTEMA 300000
-#define INTERVALO_ANUNCIO 60000
-
-// WiFi
-const char* WIFI_SSID = "NEW LINK - CAMILLA 2G";
-const char* WIFI_PASSWORD = "NG147068";
-
-const char* FW_VERSION = "AIRE-ESP32-SIMPLES-2026-01-04";
-
-// Se false: usa DHCP (recomendado) e você confirma o IP via /discovery, /identify ou Serial
-const bool USE_STATIC_IP = false;
-
-IPAddress STATIC_IP(192, 168, 1, 75);
-IPAddress STATIC_GATEWAY(192, 168, 1, 254);
-IPAddress STATIC_SUBNET(255, 255, 255, 0);
-IPAddress STATIC_DNS1(192, 168, 1, 254);
-IPAddress STATIC_DNS2(8, 8, 8, 8);
-
-/* =====================================================
-   CONFIGURAÇÕES DAS PORTAS (DIRETO NO ESP32)
-   ===================================================== */
-
+#define TIMEOUT_WIFI 15000
 #define NUM_PORTAS 4
 #define TEMPO_PULSO 500
+const char* FW_VERSION = "AIRE-ESP32-2026-FINAL";
 
-// Portas GPIO para os relés (conforme seu hardware atual)
-const uint8_t PORTAS_RELE[NUM_PORTAS] = {26, 27, 21, 22};
+static const char* AP_PASSWORD = "aire8433";
+static const char* PORTAL_USER = "aire";
+static const char* PORTAL_PASSWORD = "aire8433";
 
-// Portas GPIO para os sensores (conforme seu hardware atual)
+/* =====================================================
+   GPIOs
+   ===================================================== */
+
+const uint8_t PORTAS_RELE[NUM_PORTAS]   = {26, 27, 21, 22};
 const uint8_t PORTAS_SENSOR[NUM_PORTAS] = {18, 19, 23, 4};
 
-// Relé ativo em HIGH (fechadura ABRE em HIGH, FECHA em LOW)
-const bool RELE_ATIVO_EM_HIGH = false;
 const uint8_t RELE_LIGADO    = LOW;
 const uint8_t RELE_DESLIGADO = HIGH;
 
@@ -57,51 +34,101 @@ const uint8_t RELE_DESLIGADO = HIGH;
 
 WebServer server(80);
 
+Preferences prefs;
+
 /* =====================================================
    VARIÁVEIS
    ===================================================== */
 
-bool pulsoAtivo[NUM_PORTAS]  = {false};
-unsigned long tempoInicioPulso[NUM_PORTAS] = {0};
-
+bool pulsoAtivo[NUM_PORTAS] = {false};
 bool portaAberta[NUM_PORTAS] = {false};
+unsigned long tempoPulso[NUM_PORTAS] = {0};
 
-bool sensorFechado[NUM_PORTAS] = {false};
-bool sensorEstadoAnterior[NUM_PORTAS] = {false};
-unsigned long sensorUltimoDebounce[NUM_PORTAS] = {0};
+unsigned long tempoLed = 0;
+bool estadoLed = false;
 
-unsigned long ultimaVerificacaoWiFi = 0;
-unsigned long ultimoLogSistema = 0;
-unsigned long ultimoAnuncio = 0;
+unsigned long tempoApCheck = 0;
 
-// Identificação do dispositivo
-String deviceId = "";
-String deviceName = "";
-String currentIP = "";
-String hostname = "";
+String deviceId;
+String currentIP;
+
+String staIP;
+String apIP;
+
+String wifiSsid;
+String wifiPassword;
+
+bool modoConfig = false;
+
+static const char* PREF_NS = "aire";
+static const char* KEY_SSID = "ssid";
+static const char* KEY_PASS = "pass";
 
 /* =====================================================
-   GERAÇÃO DE ID ÚNICO
+   DEVICE ID
    ===================================================== */
+
 String gerarDeviceId() {
   uint64_t chipid = ESP.getEfuseMac();
-  String id = "";
-  for (int i = 0; i < 6; i++) {
-    if (chipid >> (8 * (5 - i)) & 0xFF) {
-      id += String((chipid >> (8 * (5 - i)) & 0xFF), HEX);
-    }
+  return String((uint32_t)(chipid >> 32), HEX);
+}
+
+void atualizarIP() {
+  if (WiFi.status() == WL_CONNECTED) {
+    staIP = WiFi.localIP().toString();
+  } else {
+    staIP = "";
   }
-  id.toUpperCase();
-  return id;
+
+  if (WiFi.getMode() & WIFI_AP) {
+    apIP = WiFi.softAPIP().toString();
+  } else {
+    apIP = "";
+  }
+
+  if (staIP.length()) currentIP = staIP;
+  else if (apIP.length()) currentIP = apIP;
+  else currentIP = "";
+}
+
+void ensureAPRunning() {
+  String apSsid = "AIRE-" + deviceId;
+
+  if (!modoConfig) {
+    return;
+  }
+
+  if (!(WiFi.getMode() & WIFI_AP)) {
+    WiFi.mode(WIFI_AP_STA);
+  }
+
+  IPAddress ip = WiFi.softAPIP();
+  bool hasApIp = !(ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0);
+  if (!hasApIp) {
+    WiFi.softAP(apSsid.c_str(), AP_PASSWORD);
+    delay(200);
+  }
+  atualizarIP();
+}
+
+void disableAP() {
+  if (WiFi.getMode() & WIFI_AP) {
+    WiFi.softAPdisconnect(true);
+    delay(100);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.mode(WIFI_STA);
+  }
+  atualizarIP();
 }
 
 /* =====================================================
    SHA256
    ===================================================== */
+
 String sha256(String input) {
   byte hash[32];
   mbedtls_sha256_context ctx;
-
   mbedtls_sha256_init(&ctx);
   mbedtls_sha256_starts(&ctx, 0);
   mbedtls_sha256_update(&ctx, (const unsigned char*)input.c_str(), input.length());
@@ -117,228 +144,544 @@ String sha256(String input) {
 }
 
 /* =====================================================
-   CONEXÃO WiFi COM DHCP
+   WIFI
    ===================================================== */
+
 bool conectarWiFi() {
-  Serial.println("[AIRE] Conectando ao WiFi...");
-  Serial.println("[AIRE] SSID: " + String(WIFI_SSID));
 
-  // Gera nome único
-  deviceId = gerarDeviceId();
-  deviceName = "AIRE-ESP32-" + deviceId;
-  hostname = "AIRE-ESP32-" + deviceId;
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(hostname.c_str());
-
-  if (USE_STATIC_IP) {
-    if (!WiFi.config(STATIC_IP, STATIC_GATEWAY, STATIC_SUBNET, STATIC_DNS1, STATIC_DNS2)) {
-      Serial.println("[AIRE] ❌ Falha ao configurar IP estático (seguindo com DHCP)");
-    } else {
-      Serial.print("[AIRE] IP estático configurado: ");
-      Serial.println(STATIC_IP);
-    }
-  } else {
-    Serial.println("[AIRE] DHCP habilitado (sem IP estático)");
+  if (!wifiSsid.length()) {
+    Serial.println("\n[AIRE] WiFi sem SSID configurado.");
+    return false;
   }
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println("\n[AIRE] Conectando WiFi...");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
 
   unsigned long inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_WIFI) {
+
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - inicio < TIMEOUT_WIFI) {
     delay(500);
     Serial.print(".");
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    currentIP = WiFi.localIP().toString();
-    Serial.println("\n[AIRE] ✅ WiFi conectado via DHCP!");
+    atualizarIP();
+    Serial.println("\n[AIRE] WiFi conectado!");
     Serial.print("[AIRE] IP: ");
     Serial.println(currentIP);
-    Serial.print("[AIRE] Device Name: ");
-    Serial.println(deviceName);
-    Serial.print("[AIRE] Hostname: ");
-    Serial.println(hostname);
-    Serial.print("[AIRE] RSSI: ");
-    Serial.println(WiFi.RSSI());
-    
+    modoConfig = false;
+    disableAP();
     return true;
   }
 
-  Serial.println("\n[AIRE] ❌ Falha na conexão WiFi");
+  Serial.println("\n[AIRE] Falha no WiFi!");
   return false;
 }
 
-void verificarConexaoWiFi() {
-  if (WiFi.status() != WL_CONNECTED && millis() - ultimaVerificacaoWiFi > INTERVALO_VERIFICACAO_WIFI) {
-    Serial.println("[AIRE] WiFi desconectado, tentando reconectar automaticamente...");
-    if (conectarWiFi()) {
-      Serial.println("[AIRE] ✅ Reconexão WiFi bem-sucedida!");
-    } else {
-      Serial.println("[AIRE] ❌ Falha na reconexão WiFi");
-    }
-    ultimaVerificacaoWiFi = millis();
+void carregarCredenciaisWiFi() {
+  prefs.begin(PREF_NS, true);
+  wifiSsid = prefs.getString(KEY_SSID, "");
+  wifiPassword = prefs.getString(KEY_PASS, "");
+  prefs.end();
+
+  if (wifiSsid.length()) {
+    Serial.print("[AIRE] SSID salvo: ");
+    Serial.println(wifiSsid);
+  } else {
+    Serial.println("[AIRE] Nenhum SSID salvo.");
   }
 }
 
-/* =====================================================
-   SISTEMA DE ANÚNCIO
-   ===================================================== */
-void anunciarDispositivo() {
-  if (millis() - ultimoAnuncio > INTERVALO_ANUNCIO && currentIP != "") {
-    // Envia anúncio via broadcast
-    WiFiUDP udp;
-    if (udp.begin(8889) == 1) {
-      String anuncio = "{"
-        "\"type\":\"anuncio\","
-        "\"device\":\"" + deviceName + "\","
-        "\"id\":\"" + deviceId + "\","
-        "\"ip\":\"" + currentIP + "\","
-        "\"hostname\":\"" + hostname + "\","
-        "\"conexao\":\"wifi\","
-        "\"timestamp\":" + String(millis()) +
-        "}";
-      
-      udp.beginPacket("255.255.255.255", 8889);
-      udp.write((uint8_t*)anuncio.c_str(), anuncio.length());
-      udp.endPacket();
-      
-      Serial.println("[AIRE] 📡 Anúncio enviado: " + deviceName + " (" + currentIP + ")");
-      ultimoAnuncio = millis();
-    }
+void salvarCredenciaisWiFi(const String& ssid, const String& pass) {
+  prefs.begin(PREF_NS, false);
+  prefs.putString(KEY_SSID, ssid);
+  prefs.putString(KEY_PASS, pass);
+  prefs.end();
+}
+
+void limparCredenciaisWiFi() {
+  prefs.begin(PREF_NS, false);
+  prefs.remove(KEY_SSID);
+  prefs.remove(KEY_PASS);
+  prefs.end();
+}
+
+String htmlEscape(const String& s) {
+  String out;
+  out.reserve(s.length() + 16);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else out += c;
+  }
+  return out;
+}
+
+void iniciarModoConfig() {
+  modoConfig = true;
+
+  WiFi.scanDelete();
+  ensureAPRunning();
+  Serial.println("[AIRE] Modo configuração WiFi");
+  Serial.print("[AIRE] AP SSID: ");
+  Serial.println("AIRE-" + deviceId);
+  Serial.print("[AIRE] AP IP: ");
+  Serial.println(apIP);
+}
+
+String wifiEncToStr(wifi_auth_mode_t enc) {
+  switch (enc) {
+    case WIFI_AUTH_OPEN:
+      return "OPEN";
+    case WIFI_AUTH_WEP:
+      return "WEP";
+    case WIFI_AUTH_WPA_PSK:
+      return "WPA";
+    case WIFI_AUTH_WPA2_PSK:
+      return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+      return "WPA/WPA2";
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+      return "WPA2-ENT";
+#ifdef WIFI_AUTH_WPA3_PSK
+    case WIFI_AUTH_WPA3_PSK:
+      return "WPA3";
+#endif
+#ifdef WIFI_AUTH_WPA2_WPA3_PSK
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+      return "WPA2/WPA3";
+#endif
+    default:
+      return "?";
   }
 }
 
-/* =====================================================
-   FUNÇÃO DE TESTE INICIAL DAS FECHADURAS (SEM ATIVAR)
-   ===================================================== */
-void testeInicialFechaduras() {
-  Serial.println("[AIRE] === TESTE INICIAL DAS FECHADURAS (APENAS VERIFICAÇÃO) ===");
-  
-  for(int i = 0; i < 4; i++) {  // Testa apenas as 4 primeiras portas
-    if (PORTAS_RELE[i] > 0) {
-      Serial.printf("[AIRE] Verificando porta %d (GPIO %d):\n", i + 1, PORTAS_RELE[i]);
-      
-      // Debug especial para portas 1 e 2 (GPIOs 26 e 27)
-      if (i == 0 || i == 1) {
-        Serial.printf("[AIRE] ⚠️ DEBUG ESPECIAL - Porta %d (GPIO %d)\n", i + 1, PORTAS_RELE[i]);
-        Serial.printf("[AIRE] GPIO %d é usado para ADC/DAC no ESP32!\n", PORTAS_RELE[i]);
-        
-        // ⚠️ NÃO ATIVA O RELÉ - APENAS VERIFICA ESTADO ATUAL
-        pinMode(PORTAS_RELE[i], OUTPUT);
-        Serial.printf("[AIRE] GPIO %d configurado como OUTPUT\n", PORTAS_RELE[i]);
-        
-        // Garante que está FECHADO antes de qualquer verificação
-        digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-        delay(100);
-        
-        // Verifica estado atual (sem alterar)
-        int estado = digitalRead(PORTAS_RELE[i]);
-        Serial.printf("[AIRE] GPIO %d estado atual: %d (%s)\n", 
-                      PORTAS_RELE[i], estado, estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
-        
-        // Se ainda estiver aberto, força novamente sem testar HIGH/LOW
-        if (estado != RELE_DESLIGADO) {
-          Serial.printf("[AIRE] ⚠️ Forçando estado FECHADO para GPIO %d\n", PORTAS_RELE[i]);
-          digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-          delay(200);
-          
-          // Verificação final
-          estado = digitalRead(PORTAS_RELE[i]);
-          Serial.printf("[AIRE] Após força - GPIO %d: %d (%s)\n", 
-                        PORTAS_RELE[i], estado, estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
-        } else {
-          Serial.printf("[AIRE] ✅ GPIO %d já está FECHADO\n", PORTAS_RELE[i]);
-        }
-      } else {
-        // Para portas 3 e 4, apenas verifica
-        digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-        delay(50);
-        int estado = digitalRead(PORTAS_RELE[i]);
-        Serial.printf("[AIRE] Porta %d (GPIO %d): %s\n", 
-                      i + 1, PORTAS_RELE[i], estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
+String jsonEscape(const String& s) {
+  String out;
+  out.reserve(s.length() + 16);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"') out += "\\\"";
+    else if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else out += c;
+  }
+  return out;
+}
+
+bool requireAuth() {
+  if (server.authenticate(PORTAL_USER, PORTAL_PASSWORD)) {
+    return true;
+  }
+  server.requestAuthentication();
+  return false;
+}
+
+void handleWifiScan() {
+  if (!requireAuth()) return;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) {
+    server.send(200, "application/json", "{\"status\":\"running\"}");
+    return;
+  }
+
+  if (n == WIFI_SCAN_FAILED) {
+    WiFi.scanNetworks(true);
+    server.send(200, "application/json", "{\"status\":\"starting\"}");
+    return;
+  }
+
+  if (n <= 0) {
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true);
+    server.send(200, "application/json", "{\"status\":\"empty\",\"networks\":[]}");
+    return;
+  }
+
+  int idx[40];
+  int count = n;
+  if (count > 40) count = 40;
+  for (int i = 0; i < count; i++) idx[i] = i;
+
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = i + 1; j < count; j++) {
+      if (WiFi.RSSI(idx[j]) > WiFi.RSSI(idx[i])) {
+        int tmp = idx[i];
+        idx[i] = idx[j];
+        idx[j] = tmp;
       }
     }
   }
+
+  String json;
+  json.reserve(2048);
+  json += "{\"status\":\"ok\",\"networks\":[";
+  for (int k = 0; k < count; k++) {
+    int i = idx[k];
+    String ssid = WiFi.SSID(i);
+    int32_t rssi = WiFi.RSSI(i);
+    wifi_auth_mode_t enc = WiFi.encryptionType(i);
+    bool hidden = ssid.length() == 0;
+
+    if (k) json += ",";
+    json += "{";
+    json += "\"ssid\":\"" + jsonEscape(ssid) + "\",";
+    json += "\"rssi\":" + String(rssi) + ",";
+    json += "\"enc\":\"" + wifiEncToStr(enc) + "\",";
+    json += "\"hidden\":" + String(hidden ? "true" : "false");
+    json += "}";
+  }
+  json += "]}";
+  server.send(200, "application/json", json);
+}
+
+void handleWifi() {
+  if (!requireAuth()) return;
+  String ipStr = staIP.length() ? staIP : String("-");
+  String ssidAtual = wifiSsid.length() ? htmlEscape(wifiSsid) : String("");
+
+  String page;
+  page.reserve(4096);
+  page += "<!doctype html><html><head><meta charset='utf-8'>";
+  page += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  page += "<title>AIRE - WiFi</title>";
+  page += "<style>";
+  page += ":root{--bg1:#070b14;--bg2:#0b1220;--card:rgba(255,255,255,.06);--muted:#9bb0d0;--text:#eaf2ff;--accent:#4ea1ff;--ok:#2dd4bf;--err:#fb7185;--line:rgba(255,255,255,.10);--shadow:0 16px 40px rgba(0,0,0,.28);}";
+  page += "*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2) 55%,var(--bg1));color:var(--text)}";
+  page += "body:before{content:'';position:fixed;inset:-20%;background:radial-gradient(900px 520px at 20% 0%,rgba(78,161,255,.16),transparent 60%),radial-gradient(760px 420px at 110% 10%,rgba(45,212,191,.12),transparent 55%);pointer-events:none;filter:blur(0px)}";
+  page += ".wrap{max-width:860px;margin:0 auto;padding:18px}h1{margin:4px 0 14px;font-size:26px;letter-spacing:.4px}h2{margin:0;font-size:13px;color:rgba(234,242,255,.86);font-weight:900;text-transform:uppercase;letter-spacing:.14em}";
+  page += ".grid{display:grid;grid-template-columns:1fr;gap:14px}@media(min-width:820px){.grid{grid-template-columns:1.1fr .9fr}}";
+  page += ".card{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));border:1px solid var(--line);border-radius:18px;padding:14px;backdrop-filter:blur(10px);box-shadow:var(--shadow)}";
+  page += ".cardHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}";
+  page += ".cardTitle{display:flex;align-items:center;gap:10px;min-width:0}";
+  page += ".iconDot{width:34px;height:34px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;background:rgba(78,161,255,.12);border:1px solid rgba(78,161,255,.20);color:rgba(234,242,255,.92);font-weight:900}";
+  page += ".cardBadge{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);font-size:12px;color:rgba(234,242,255,.86);font-weight:900;white-space:nowrap}";
+  page += ".card.highlight{border-color:rgba(78,161,255,.35);box-shadow:0 18px 46px rgba(78,161,255,.10),var(--shadow)}";
+  page += ".card.highlight .iconDot{background:linear-gradient(135deg,rgba(78,161,255,.22),rgba(45,212,191,.16));border-color:rgba(78,161,255,.32)}";
+  page += ".meta{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:13px;color:var(--muted)}.meta b{color:var(--text);font-weight:800}";
+  page += ".row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--text);padding:10px 12px;border-radius:12px;font-weight:800;cursor:pointer}button:hover{border-color:rgba(78,161,255,.6)}button.primary{background:linear-gradient(90deg,rgba(78,161,255,.95),rgba(78,161,255,.75));border-color:rgba(78,161,255,.75)}button.danger{background:rgba(251,113,133,.12);border-color:rgba(251,113,133,.35)}button:disabled{opacity:.55;cursor:not-allowed}";
+  page += ".status{padding:10px 12px;border-radius:12px;border:1px solid var(--line);font-size:13px;color:var(--muted)}.status.ok{border-color:rgba(45,212,191,.55);color:rgba(45,212,191,.95)}.status.err{border-color:rgba(251,113,133,.55);color:rgba(251,113,133,.95)}";
+  page += ".status.hint{font-size:12px;line-height:1.35;color:rgba(155,176,208,.85);background:rgba(255,255,255,.03)}";
+  page += ".status.result{font-size:12px;color:rgba(234,242,255,.86);background:rgba(255,255,255,.03)}";
+  page += "label{display:block;font-size:12px;color:var(--muted);font-weight:800;margin:10px 0 6px}input{width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.18);color:var(--text);outline:none}input:focus{border-color:rgba(78,161,255,.75);box-shadow:0 0 0 3px rgba(78,161,255,.15)}";
+  page += ".pill{display:inline-flex;gap:8px;align-items:center;padding:8px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);font-size:13px;color:var(--muted)}.pill b{color:var(--text)}";
+  page += ".list{margin-top:10px;border:1px solid var(--line);border-radius:14px;overflow:hidden} .item{padding:12px 12px;cursor:pointer;background:rgba(255,255,255,.03)} .item+.item{border-top:1px solid var(--line)} .item:hover{background:rgba(78,161,255,.10)} .item .t{font-weight:900} .item .s{font-size:12px;color:var(--muted);margin-top:2px}";
+  page += ".ports{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}@media(min-width:520px){.ports{grid-template-columns:repeat(4,1fr)}}";
+  page += ".ports button{padding:0;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.04));box-shadow:0 10px 24px rgba(0,0,0,.22);overflow:hidden}";
+  page += ".ports button:hover{border-color:rgba(78,161,255,.50);transform:translateY(-1px)}";
+  page += ".ports button:active{transform:translateY(0px)}";
+  page += ".portCard{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:64px;padding:12px}";
+  page += ".portLabel{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:rgba(155,176,208,.85);font-weight:900}";
+  page += ".portNum{font-size:22px;line-height:1;color:rgba(234,242,255,.98);font-weight:950}";
+  page += "</style></head><body><div class='wrap'>";
+  page += "<h1>AIRE - Configurar WiFi</h1>";
+  page += "<div class='grid'>";
+  page += "<div class='card'>";
+  page += "<div class='cardHead'><div class='cardTitle'><span class='iconDot'>Wi</span><h2>Conexão</h2></div><div class='cardBadge'>WiFi</div></div>";
+  page += "<div class='meta'><div>Device</div><div><b>" + htmlEscape(deviceId) + "</b></div><div>FW</div><div><b>" + htmlEscape(String(FW_VERSION)) + "</b></div><div>IP WiFi</div><div><b id='ipSta'>" + htmlEscape(staIP.length() ? staIP : String("-")) + "</b></div><div>IP AP</div><div><b id='ipAp'>" + htmlEscape(apIP.length() ? apIP : String("-")) + "</b></div></div>";
+  page += "<div style='margin-top:12px' class='row'>";
+  page += "<div class='pill' id='selPill' style='display:none'><span>Selecionado:</span> <b id='selName'></b> <button type='button' onclick='showList()' style='padding:6px 10px;border-radius:999px'>Trocar</button></div>";
+  page += "<button type='button' onclick='scan()' id='btnScan'>Buscar / Atualizar WiFi</button>";
+  page += "<div id='scanStatus' class='status' style='flex:1;min-width:220px'>Pronto</div>";
+  page += "</div>";
+  page += "<div id='networks'></div>";
+  page += "<label>SSID</label><input id='ssid' value='" + ssidAtual + "' placeholder='Nome do WiFi'>";
+  page += "<label>Senha</label><input id='senha' type='password' value='' placeholder='Senha (se houver)'>";
+  page += "<div class='row' style='margin-top:12px'>";
+  page += "<button class='primary' type='button' onclick='conectar()' id='btnConn'>Conectar</button>";
+  page += "<button class='danger' type='button' onclick='desconectar()'>Desconectar</button>";
+  page += "<button type='button' onclick='limpar()'>Limpar WiFi salvo</button>";
+  page += "</div>";
+  page += "</div>";
+  page += "<div class='card highlight'>";
+  page += "<div class='cardHead'><div class='cardTitle'><span class='iconDot'>TP</span><h2>Testar portas</h2></div><div class='cardBadge'>Teste rápido</div></div>";
+  page += "<div class='status hint' id='tipPortal' style='margin-bottom:10px'>Conectado. Você pode testar as portas por aqui.</div>";
+  page += "<div class='ports'>";
+  page += "<button type='button' onclick='testar(1)'><span class='portCard'><span class='portLabel'>Porta</span><span class='portNum'>1</span></span></button>";
+  page += "<button type='button' onclick='testar(2)'><span class='portCard'><span class='portLabel'>Porta</span><span class='portNum'>2</span></span></button>";
+  page += "<button type='button' onclick='testar(3)'><span class='portCard'><span class='portLabel'>Porta</span><span class='portNum'>3</span></span></button>";
+  page += "<button type='button' onclick='testar(4)'><span class='portCard'><span class='portLabel'>Porta</span><span class='portNum'>4</span></span></button>";
+  page += "</div>";
+  page += "<div id='portaStatus' class='status result' style='margin-top:10px'>—</div>";
+  page += "</div>";
+  page += "</div>";
+  page += "<script>";
+  page += "const elStatus=document.getElementById('scanStatus');";
+  page += "const elList=document.getElementById('networks');";
+  page += "const ipSta=document.getElementById('ipSta');";
+  page += "const ipAp=document.getElementById('ipAp');";
+  page += "const selPill=document.getElementById('selPill');";
+  page += "const selName=document.getElementById('selName');";
+  page += "const portaStatus=document.getElementById('portaStatus');";
+  page += "const tipPortal=document.getElementById('tipPortal');";
+  page += "function setOk(msg){elStatus.className='status ok';elStatus.textContent=msg;}";
+  page += "function setErr(msg){elStatus.className='status err';elStatus.textContent=msg;}";
+  page += "function setInfo(msg){elStatus.className='status';elStatus.textContent=msg;}";
+  page += "function setSsid(v){document.getElementById('ssid').value=v;}";
+  page += "function hideList(){elList.style.display='none';}";
+  page += "function showList(){elList.style.display='block';selPill.style.display='none';}";
+  page += "function selectWifi(name){setSsid(name);selName.textContent=name||'(oculta)';selPill.style.display='inline-flex';hideList();}";
+  page += "function rssiBars(r){if(r>-55)return '★★★★★'; if(r>-65)return '★★★★☆'; if(r>-75)return '★★★☆☆'; if(r>-85)return '★★☆☆☆'; return '★☆☆☆☆';}";
+  page += "async function scan(){";
+  page += "setInfo('Buscando redes...');";
+  page += "elList.style.display='block';";
+  page += "elList.innerHTML='';";
+  page += "for(let t=0;t<12;t++){";
+  page += "const res=await fetch('/wifi/scan',{cache:'no-store'});";
+  page += "const data=await res.json();";
+  page += "if(data.status==='ok'){";
+  page += "setOk('Encontradas: '+data.networks.length);";
+  page += "elList.innerHTML='';";
+  page += "const box=document.createElement('div');";
+  page += "box.className='list';";
+  page += "data.networks.forEach((n,i)=>{";
+  page += "const row=document.createElement('div');";
+  page += "row.className='item';";
+  page += "const name=(n.hidden||!n.ssid)?'(oculta)':n.ssid;";
+  page += "const t1=document.createElement('div');";
+  page += "t1.className='t';";
+  page += "t1.textContent=name;";
+  page += "const t2=document.createElement('div');";
+  page += "t2.className='s';";
+  page += "t2.textContent='Sinal: ' + rssiBars(n.rssi) + ' (' + n.rssi + ' dBm) | ' + n.enc;";
+  page += "row.appendChild(t1);";
+  page += "row.appendChild(t2);";
+  page += "row.onclick=()=>selectWifi(n.ssid||'');";
+  page += "box.appendChild(row);";
+  page += "});";
+  page += "elList.appendChild(box);";
+  page += "return;";
+  page += "} else if(data.status==='running' || data.status==='starting' || data.status==='empty'){";
+  page += "await new Promise(r=>setTimeout(r,500));";
+  page += "continue;";
+  page += "} else {";
+  page += "setErr('Falha ao buscar WiFi');";
+  page += "return;";
+  page += "}";
+  page += "}";
+  page += "setErr('Tempo esgotado no scan');";
+  page += "}";
   
-  Serial.println("[AIRE] === FIM DO TESTE INICIAL (NENHUMA PORTA ATIVADA) ===");
+  page += "async function status(){";
+  page += "try{const r=await fetch('/wifi/status',{cache:'no-store'});const d=await r.json();";
+  page += "ipSta.textContent=d.staIp||'-';";
+  page += "ipAp.textContent=d.apIp||'192.168.4.1';";
+  page += "if(d.connected){setOk('Conectado ao WiFi: '+(d.ssid||''));";
+  page += "const host=String(window.location.hostname||'');";
+  page += "if(d.staIp && host!==d.staIp){tipPortal.innerHTML=\"Conectado. Você pode acessar por WiFi: <a href='http://\"+d.staIp+\"/' style='color:#9fd0ff;font-weight:900'>http://\"+d.staIp+\"/</a> (AP também continua ativo em 192.168.4.1)\";} else { tipPortal.textContent='Conectado. Você pode testar as portas por aqui.'; }";
+  page += "} else {setInfo('Não conectado. Configure e conecte.'); tipPortal.textContent='AP sempre disponível. Conecte no WiFi do ESP: '+(d.apSsid||'AIRE')+' e abra 192.168.4.1 para configurar.';}";
+  page += "}catch(e){setErr('Falha ao obter status');}";
+  page += "}";
+  
+  page += "async function conectar(){";
+  page += "const ssid=document.getElementById('ssid').value.trim();";
+  page += "const senha=document.getElementById('senha').value;";
+  page += "if(!ssid){setErr('Informe o SSID');return;}";
+  page += "document.getElementById('btnConn').disabled=true;";
+  page += "setInfo('Conectando...');";
+  page += "try{const res=await fetch('/wifi/conectar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ssid='+encodeURIComponent(ssid)+'&senha='+encodeURIComponent(senha)});";
+  page += "const d=await res.json();";
+  page += "if(d.ok){setOk('Conectado! IP: '+(d.ip||'-'));ipSta.textContent=d.ip||'-';}";
+  page += "else{setErr('Erro ao conectar. Verifique SSID/senha.');}";
+  page += "}catch(e){setErr('Erro ao conectar');}finally{document.getElementById('btnConn').disabled=false;}";
+  page += "}";
+  
+  page += "async function desconectar(){";
+  page += "setInfo('Desconectando...');";
+  page += "try{await fetch('/wifi/desconectar',{method:'POST'});setOk('Desconectado.');await status();}catch(e){setErr('Falha ao desconectar');}";
+  page += "}";
+  
+  page += "async function limpar(){";
+  page += "setInfo('Limpando WiFi salvo...');";
+  page += "try{await fetch('/wifi/reset',{method:'POST'});setOk('WiFi salvo limpo.');document.getElementById('ssid').value='';document.getElementById('senha').value='';await status();}catch(e){setErr('Falha ao limpar');}";
+  page += "}";
+  
+  page += "async function testar(p){";
+  page += "portaStatus.className='status';portaStatus.textContent='Testando porta '+p+'...';";
+  page += "try{const r=await fetch('/teste/abrir?porta='+encodeURIComponent(p),{cache:'no-store'});";
+  page += "let d=null; try{d=await r.json();}catch(_){d=null;}";
+  page += "if(r.ok && d && d.ok){portaStatus.className='status ok';portaStatus.textContent='Pulso enviado na porta '+p+'.';}";
+  page += "else{portaStatus.className='status err';portaStatus.textContent='Erro ao testar ('+r.status+'): '+((d&&d.erro)?d.erro:'falha');}";
+  page += "}catch(e){portaStatus.className='status err';portaStatus.textContent='Erro ao testar (sem conexão com o ESP)';}";
+  page += "}";
+  
+  page += "status();";
+  page += "</script>";
+  page += "</div></body></html>";
+  
+  server.send(200, "text/html", page);
+}
+
+void handleWifiSalvar() {
+  if (!requireAuth()) return;
+  if (!server.hasArg("ssid")) {
+    server.send(400, "application/json", "{\"erro\":\"ssid_obrigatorio\"}");
+    return;
+  }
+
+  String ssid = server.arg("ssid");
+  String senha = server.hasArg("senha") ? server.arg("senha") : String("");
+  ssid.trim();
+
+  if (!ssid.length()) {
+    server.send(400, "application/json", "{\"erro\":\"ssid_obrigatorio\"}");
+    return;
+  }
+
+  salvarCredenciaisWiFi(ssid, senha);
+  wifiSsid = ssid;
+  wifiPassword = senha;
+
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleWifiReset() {
+  if (!requireAuth()) return;
+  limparCredenciaisWiFi();
+  wifiSsid = "";
+  wifiPassword = "";
+  WiFi.disconnect(true, true);
+  modoConfig = true;
+  ensureAPRunning();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleWifiStatus() {
+  if (!requireAuth()) return;
+  bool connected = WiFi.status() == WL_CONNECTED;
+  atualizarIP();
+  String json;
+  json.reserve(256);
+  json += "{";
+  json += "\"connected\":" + String(connected ? "true" : "false") + ",";
+  json += "\"modeConfig\":" + String(modoConfig ? "true" : "false") + ",";
+  json += "\"ssid\":\"" + jsonEscape(wifiSsid) + "\",";
+  json += "\"ip\":\"" + jsonEscape(currentIP) + "\",";
+  json += "\"staIp\":\"" + jsonEscape(staIP) + "\",";
+  json += "\"apIp\":\"" + jsonEscape(apIP) + "\",";
+  json += "\"apSsid\":\"" + jsonEscape(String("AIRE-") + deviceId) + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void handleWifiConectar() {
+  if (!requireAuth()) return;
+  if (!server.hasArg("ssid")) {
+    server.send(400, "application/json", "{\"ok\":false,\"erro\":\"ssid_obrigatorio\"}");
+    return;
+  }
+  String ssid = server.arg("ssid");
+  String senha = server.hasArg("senha") ? server.arg("senha") : String("");
+  ssid.trim();
+  if (!ssid.length()) {
+    server.send(400, "application/json", "{\"ok\":false,\"erro\":\"ssid_obrigatorio\"}");
+    return;
+  }
+
+  wifiSsid = ssid;
+  wifiPassword = senha;
+  salvarCredenciaisWiFi(ssid, senha);
+
+  WiFi.mode(WIFI_AP_STA);
+  modoConfig = true;
+  ensureAPRunning();
+  WiFi.disconnect(false, false);
+  delay(100);
+  WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+  ensureAPRunning();
+
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_WIFI) {
+    delay(250);
+    server.handleClient();
+  }
+
+  bool ok = WiFi.status() == WL_CONNECTED;
+  atualizarIP();
+
+  if (ok) {
+    modoConfig = false;
+    disableAP();
+  }
+
+  String json;
+  json.reserve(256);
+  json += "{";
+  json += "\"ok\":" + String(ok ? "true" : "false") + ",";
+  json += "\"ssid\":\"" + jsonEscape(wifiSsid) + "\",";
+  json += "\"ip\":\"" + jsonEscape(currentIP) + "\"";
+  if (!ok) json += ",\"erro\":\"falha_conectar\"";
+  json += "}";
+  server.send(ok ? 200 : 500, "application/json", json);
+}
+
+void handleWifiDesconectar() {
+  if (!requireAuth()) return;
+  WiFi.disconnect(true, true);
+  modoConfig = true;
+  ensureAPRunning();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleTesteAbrir() {
+  if (!requireAuth()) return;
+  if (!server.hasArg("porta")) {
+    server.send(400, "application/json", "{\"ok\":false,\"erro\":\"porta_obrigatoria\"}");
+    return;
+  }
+  int porta = server.arg("porta").toInt();
+  if (porta < 1 || porta > NUM_PORTAS) {
+    server.send(400, "application/json", "{\"ok\":false,\"erro\":\"porta_invalida\"}");
+    return;
+  }
+  abrirPorta(porta);
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 /* =====================================================
-   FUNÇÕES DAS PORTAS (DIRETO NO ESP32)
+   CONTROLE PORTAS
    ===================================================== */
 
 void abrirPorta(int porta) {
   int i = porta - 1;
   if (i < 0 || i >= NUM_PORTAS) return;
 
-  Serial.printf("[AIRE] Abrindo porta %d (GPIO %d)\n", porta, PORTAS_RELE[i]);
-  Serial.printf("[AIRE] RELE_LIGADO = %d\n", RELE_LIGADO);
-  Serial.printf("[AIRE] Estado antes: %d\n", digitalRead(PORTAS_RELE[i]));
-  
   digitalWrite(PORTAS_RELE[i], RELE_LIGADO);
-  portaAberta[i] = true;
   pulsoAtivo[i] = true;
-  tempoInicioPulso[i] = millis();
-
-  Serial.printf("[AIRE] Estado depois: %d\n", digitalRead(PORTAS_RELE[i]));
-  Serial.printf("[AIRE] Porta %d ABERTA (GPIO %d)\n", porta, PORTAS_RELE[i]);
-}
-
-void fecharPorta(int porta) {
-  int i = porta - 1;
-  if (i < 0 || i >= NUM_PORTAS) return;
-
-  digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-  portaAberta[i] = false;
-  pulsoAtivo[i] = false;
-
-  Serial.printf("[AIRE] Porta %d FECHADA (GPIO %d)\n", porta, PORTAS_RELE[i]);
+  tempoPulso[i] = millis();
+  portaAberta[i] = true;
 }
 
 void verificarPulsos() {
-  unsigned long agora = millis();
   for (int i = 0; i < NUM_PORTAS; i++) {
-    if (pulsoAtivo[i] && agora - tempoInicioPulso[i] >= TEMPO_PULSO) {
+    if (pulsoAtivo[i] &&
+        millis() - tempoPulso[i] >= TEMPO_PULSO) {
+
       digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
       pulsoAtivo[i] = false;
       portaAberta[i] = false;
-      Serial.printf("[AIRE] Porta %d FECHADA (pulso de %dms)\n", i + 1, TEMPO_PULSO);
-    }
-  }
-}
-
-void atualizarSensores() {
-  unsigned long agora = millis();
-  for (int i = 0; i < NUM_PORTAS; i++) {
-    bool leitura = (digitalRead(PORTAS_SENSOR[i]) == LOW);
-
-    if (leitura != sensorEstadoAnterior[i] &&
-        agora - sensorUltimoDebounce[i] > 50) { // 50ms debounce
-
-      sensorEstadoAnterior[i] = leitura;
-      sensorFechado[i] = leitura;
-      sensorUltimoDebounce[i] = agora;
-
-      Serial.print("[SENSOR] Porta ");
-      Serial.print(i + 1);
-      Serial.print(" (GPIO ");
-      Serial.print(PORTAS_SENSOR[i]);
-      Serial.print(") => ");
-      Serial.println(leitura ? "FECHADO" : "ABERTO");
     }
   }
 }
 
 /* =====================================================
-   AUTENTICAÇÃO
+   AUTORIZAÇÃO
    ===================================================== */
 
 bool autorizado() {
+
   if (!server.hasArg("condominio_uid") ||
       !server.hasArg("porta_uid") ||
       !server.hasArg("porta") ||
-      !server.hasArg("token")) return false;
+      !server.hasArg("token"))
+    return false;
 
   String base =
     server.arg("condominio_uid") + ":" +
@@ -349,370 +692,111 @@ bool autorizado() {
   return sha256(base).equalsIgnoreCase(server.arg("token"));
 }
 
-bool autorizadoResetWifi() {
-  if (!server.hasArg("token")) return false;
-  return server.arg("token") == WIFI_RESET_TOKEN;
-}
-
 /* =====================================================
    ROTAS
    ===================================================== */
 
 void handleDiscovery() {
-  String json = "{"
-    "\"device\":\"" + deviceName + "\","
-    "\"id\":\"" + deviceId + "\","
-    "\"fw_version\":\"" + String(FW_VERSION) + "\","
-    "\"ip\":\"" + currentIP + "\","
-    "\"hostname\":\"" + hostname + "\","
-    "\"conexao\":\"wifi\","
-    "\"status\":\"online\","
-    "\"uptime\":" + String(millis() / 1000) + ","
-    "\"memoria_livre\":" + String(ESP.getFreeHeap()) + ","
-    "\"hardware\":\"esp32_direto\","
-    "\"portas_gpio\":{"
-      "\"reles\":[" + String(PORTAS_RELE[0]) + "," + String(PORTAS_RELE[1]) + "," + String(PORTAS_RELE[2]) + "," + String(PORTAS_RELE[3]) + "," + String(PORTAS_RELE[4]) + "," + String(PORTAS_RELE[5]) + "," + String(PORTAS_RELE[6]) + "," + String(PORTAS_RELE[7]) + "],"
-      "\"sensores\":[" + String(PORTAS_SENSOR[0]) + "," + String(PORTAS_SENSOR[1]) + "," + String(PORTAS_SENSOR[2]) + "," + String(PORTAS_SENSOR[3]) + "," + String(PORTAS_SENSOR[4]) + "," + String(PORTAS_SENSOR[5]) + "," + String(PORTAS_SENSOR[6]) + "," + String(PORTAS_SENSOR[7]) + "]"
-    "},"
-    "\"timestamp\":" + String(millis()) +
-    "}";
-  
-  server.send(200, "application/json", json);
-}
 
-void handleStatus() {
-  String json = "{"
-    "\"conexao\":\"wifi\","
-    "\"ip\":\"" + currentIP + "\","
-    "\"hostname\":\"" + hostname + "\","
-    "\"device\":\"" + deviceName + "\","
-    "\"id\":\"" + deviceId + "\","
-    "\"fw_version\":\"" + String(FW_VERSION) + "\","
-    "\"ssid\":\"" + WiFi.SSID() + "\","
-    "\"rssi\":" + String(WiFi.RSSI()) + ","
-    "\"uptime\":" + String(millis() / 1000) + ","
-    "\"memoria_livre\":" + String(ESP.getFreeHeap()) + ","
-    "\"hardware\":\"esp32_direto\","
-    "\"portas\":[";
-    
-  for (int i = 0; i < NUM_PORTAS; i++) {
-    if (i > 0) json += ",";
-    json += "{\"porta\":" + String(i + 1) + 
-           ",\"estado\":\"" + String(portaAberta[i] ? "aberta" : "fechada") + 
-           ",\"sensor\":\"" + String(sensorFechado[i] ? "fechado" : "aberto") + 
-           ",\"pulso\":" + String(pulsoAtivo[i] ? "true" : "false") + 
-           ",\"gpio_rele\":" + String(PORTAS_RELE[i]) + 
-           ",\"gpio_sensor\":" + String(PORTAS_SENSOR[i]) + "}";
-  }
-  
-  json += "],"
-    "\"timestamp\":" + String(millis()) +
-    "}";
-  
-  server.send(200, "application/json", json);
-}
-
-void handleSensor() {
-  if (!server.hasArg("porta")) {
-    server.send(400, "application/json", "{\"erro\":\"porta_obrigatoria\"}");
-    return;
-  }
-
-  int porta = server.arg("porta").toInt();
-  
-  if (porta < 1 || porta > NUM_PORTAS) {
-    server.send(400, "application/json", "{\"erro\":\"porta_invalida\"}");
-    return;
-  }
-
-  int i = porta - 1;
-  int gpio = PORTAS_SENSOR[i];
-  int raw = digitalRead(gpio);
-  bool fechado = (raw == LOW);
-
-  String json = "{" 
-    "\"porta\":" + String(porta) + "," 
-    "\"gpio_sensor\":" + String(gpio) + "," 
-    "\"raw\":" + String(raw) + "," 
-    "\"sensor\":\"" + String(fechado ? "fechado" : "aberto") + "\"," 
-    "\"timestamp\":" + String(millis()) + "," 
-    "\"fw_version\":\"" + String(FW_VERSION) + "\"" 
-    "}";
+  String json = "{";
+  json += "\"device\":\"AIRE-ESP32\",";
+  json += "\"id\":\"" + deviceId + "\",";
+  json += "\"fw\":\"" + String(FW_VERSION) + "\",";
+  json += "\"ip\":\"" + currentIP + "\"";
+  json += "}";
 
   server.send(200, "application/json", json);
 }
 
 void handleAbrir() {
+
   if (!autorizado()) {
     server.send(401, "application/json", "{\"erro\":\"nao_autorizado\"}");
     return;
   }
 
   int porta = server.arg("porta").toInt();
-  
-  if (porta < 1 || porta > NUM_PORTAS) {
-    server.send(400, "application/json", "{\"erro\":\"porta_invalida\"}");
-    return;
-  }
-
-  Serial.println("[AIRE] Requisição para abrir porta recebida");
-  Serial.printf("[AIRE] ✅ Abrindo porta %d (GPIO %d)\n", porta, PORTAS_RELE[porta-1]);
-  
   abrirPorta(porta);
 
-  String response = "{\"ok\":true,\"porta\":" + String(porta) + ",\"gpio_rele\":" + String(PORTAS_RELE[porta-1]) + ",\"timestamp\":" + String(millis()) + "}";
-  server.send(200, "application/json", response);
-}
-
-void handleFechar() {
-  if (!autorizado()) {
-    server.send(401, "application/json", "{\"erro\":\"nao_autorizado\"}");
-    return;
-  }
-
-  int porta = server.arg("porta").toInt();
-  
-  if (porta < 1 || porta > NUM_PORTAS) {
-    server.send(400, "application/json", "{\"erro\":\"porta_invalida\"}");
-    return;
-  }
-
-  Serial.println("[AIRE] Requisição para fechar porta recebida");
-  Serial.printf("[AIRE] Fechando porta %d (GPIO %d)\n", porta, PORTAS_RELE[porta-1]);
-  
-  fecharPorta(porta);
-
-  String response = "{\"ok\":true,\"porta\":" + String(porta) + ",\"gpio_rele\":" + String(PORTAS_RELE[porta-1]) + ",\"timestamp\":" + String(millis()) + "}";
-  server.send(200, "application/json", response);
-}
-
-void handleIdentify() {
-  Serial.println("[AIRE] 🔍 REQUISIÇÃO DE IDENTIFICAÇÃO RECEBIDA");
-  
-  // Pisca LED builtin para identificação física
-  // ESP32 não tem LED_BUILTIN padrão, usa GPIO 2
-  const int LED_PIN = 2;
-  pinMode(LED_PIN, OUTPUT);
-  
-  for(int i = 0; i < 5; i++) {
-    digitalWrite(LED_PIN, HIGH);
-    delay(200);
-    digitalWrite(LED_PIN, LOW);
-    delay(200);
-  }
-  
-  String response = "{"
-    "\"ok\":true,"
-    "\"message\":\"Device identificado: " + deviceName + "\","
-    "\"led_blink\":true,"
-    "\"hardware\":\"esp32_direto\","
-    "\"ip\":\"" + currentIP + "\""
-  "}";
-  server.send(200, "application/json", response);
-}
-
-/* =====================================================
-   LOG DO SISTEMA
-   ===================================================== */
-void logSistema() {
-  Serial.println("[AIRE] === STATUS DO SISTEMA ===");
-  Serial.println("[AIRE] Device: " + deviceName);
-  Serial.println("[AIRE] ID: " + deviceId);
-  Serial.println("[AIRE] Hardware: ESP32 Direto (sem MCP23017)");
-  Serial.println("[AIRE] IP: " + currentIP);
-  Serial.println("[AIRE] SSID: " + WiFi.SSID());
-  Serial.println("[AIRE] RSSI: " + String(WiFi.RSSI()) + " dBm");
-  Serial.println("[AIRE] Uptime: " + String(millis() / 1000) + "s");
-  Serial.println("[AIRE] Memória Livre: " + String(ESP.getFreeHeap()) + " bytes");
-  
-  Serial.println("[AIRE] Portas - Relés:");
-  for (int i = 0; i < NUM_PORTAS; i++) {
-    Serial.printf("[AIRE]   Porta %d: GPIO %d (Relé) | GPIO %d (Sensor)\n", 
-                  i + 1, PORTAS_RELE[i], PORTAS_SENSOR[i]);
-  }
-  
-  Serial.println("[AIRE] ===========================");
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 /* =====================================================
    SETUP
    ===================================================== */
+
 void setup() {
+
   Serial.begin(115200);
-  delay(1000);
+  delay(2000);
 
-  // Configura LED builtin (ESP32 não tem LED_BUILTIN padrão)
-  const int LED_PIN = 2;           // LED builtin
-  const int LED_PIN_EXTERNO = 33;  // LED externo (opcional)
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(LED_PIN_EXTERNO, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(LED_PIN_EXTERNO, LOW);
+  Serial.println("\n===== AIRE ESP32 INICIANDO =====");
 
-  Serial.println("\n=== AIRE ESP32 SIMPLES (SEM MCP23017) ===");
-  
-  // Inicializa watchdog
-  esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 5000,
-    .idle_core_mask = 0,
-    .trigger_panic = true
-  };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
-  Serial.println("[AIRE] Watchdog configurado");
+  pinMode(2, OUTPUT);   // LED
+  digitalWrite(2, LOW);
 
-  // Configura portas dos relés (apenas as portas em uso)
-  for(int i = 0; i < NUM_PORTAS; i++){
-    if (PORTAS_RELE[i] > 0) {  // ✅ Só configura se GPIO for válido
-      // ⚠️ Evita glitch no boot: define nível primeiro, depois habilita OUTPUT
-      digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-      pinMode(PORTAS_RELE[i], OUTPUT);
-      
-      // ⚠️ FORÇA ESTADO FECHADO IMEDIATAMENTE (LOW = FECHADO)
-      digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);  // LOW = FECHADO
-      delay(100); // Delay maior para estabilizar
-      
-      // ⚠️ PROTEÇÃO ESPECIAL PARA PORTAS 1 e 2 (GPIOs 26/27)
-      if (i == 0 || i == 1) {
-        Serial.printf("[AIRE] 🛡️ PROTEÇÃO ESPECIAL - Forçando porta %d (GPIO %d) FECHADA\n", i + 1, PORTAS_RELE[i]);
-        
-        // Força múltiplas vezes para garantir
-        for(int j = 0; j < 5; j++) {
-          digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);  // LOW = FECHADO
-          delay(50);
-        }
-        
-        // Verificação
-        int estado = digitalRead(PORTAS_RELE[i]);
-        Serial.printf("[AIRE] Porta %d após proteção: %d (%s)\n", 
-                      i + 1, estado, estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
-      }
-      
-      // Verificação imediata para todas
-      int estado = digitalRead(PORTAS_RELE[i]);
-      Serial.printf("[AIRE] Relé porta %d configurado no GPIO %d (estado: %s)\n", 
-                    i + 1, PORTAS_RELE[i], estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
-      
-      // Se ainda estiver aberto, força novamente
-      if (estado != RELE_DESLIGADO) {
-        Serial.printf("[AIRE] ⚠️ Forçando estado FECHADO novamente para GPIO %d\n", PORTAS_RELE[i]);
-        digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-        delay(200);
-      }
-    }
-  }
-  Serial.println("[AIRE] Portas dos relés configuradas - TODAS FORÇADAS FECHADAS");
+  deviceId = gerarDeviceId();
 
-  // Configura portas dos sensores (apenas as portas em uso)
-  for(int i = 0; i < NUM_PORTAS; i++){
-    if (PORTAS_SENSOR[i] > 0) {  // ✅ Só configura se GPIO for válido
-      pinMode(PORTAS_SENSOR[i], INPUT_PULLUP);
-      Serial.printf("[AIRE] Sensor porta %d configurado no GPIO %d\n", i + 1, PORTAS_SENSOR[i]);
-    }
-  }
-  Serial.println("[AIRE] Portas dos sensores configuradas");
-
-  // Teste inicial das fechaduras
-  testeInicialFechaduras();
-  
-  // ⚠️ VERIFICAÇÃO FINAL - Garante que todas as portas estão FECHADAS
-  Serial.println("[AIRE] === VERIFICAÇÃO FINAL - TODAS FECHADURAS FECHADAS ===");
-  for(int i = 0; i < 4; i++) {
-    if (PORTAS_RELE[i] > 0) {
-      // Proteção extra para portas 1 e 2
-      if (i == 0 || i == 1) {
-        Serial.printf("[AIRE] 🛡️ VERIFICAÇÃO EXTRA - Porta %d (GPIO %d)\n", i + 1, PORTAS_RELE[i]);
-        
-        // Força estado FECHADO 3 vezes
-        for(int k = 0; k < 3; k++) {
-          digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);  // LOW = FECHADO
-          delay(100);
-        }
-      }
-      
-      digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-      delay(100);
-      int estado = digitalRead(PORTAS_RELE[i]);
-      Serial.printf("[AIRE] Porta %d (GPIO %d): %d (%s)\n", 
-                    i + 1, PORTAS_RELE[i], estado, estado == RELE_DESLIGADO ? "FECHADO ✅" : "ABERTO ❌");
-      
-      // Se ainda estiver aberto, alerta
-      if (estado != RELE_DESLIGADO) {
-        Serial.printf("[AIRE] 🚨 ALERTA - Porta %d ainda está ABERTA! Forçando novamente...\n", i + 1);
-        for(int l = 0; l < 10; l++) {
-          digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
-          delay(50);
-        }
-      }
-    }
-  }
-  Serial.println("[AIRE] === FIM DA VERIFICAÇÃO FINAL ===");
-
-  // Conecta WiFi
-  if(!conectarWiFi()) {
-    Serial.println("[AIRE] ❌ Falha na conexão WiFi, reiniciando...");
-    delay(5000);
-    ESP.restart();
+  for (int i = 0; i < NUM_PORTAS; i++) {
+    pinMode(PORTAS_RELE[i], OUTPUT);
+    digitalWrite(PORTAS_RELE[i], RELE_DESLIGADO);
+    pinMode(PORTAS_SENSOR[i], INPUT_PULLUP);
   }
 
-  // Configura servidor web
+  carregarCredenciaisWiFi();
+  if (!conectarWiFi()) {
+    iniciarModoConfig();
+  }
+
   server.on("/discovery", handleDiscovery);
-  server.on("/status", handleStatus);
-  server.on("/sensor", handleSensor);
   server.on("/abrir", handleAbrir);
-  server.on("/fechar", handleFechar);
-  server.on("/identify", handleIdentify);
-  
-  // Adiciona CORS
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  
+  server.on("/", HTTP_GET, handleWifi);
+  server.on("/wifi", HTTP_GET, handleWifi);
+  server.on("/wifi/scan", HTTP_GET, handleWifiScan);
+  server.on("/wifi/status", HTTP_GET, handleWifiStatus);
+  server.on("/wifi/conectar", HTTP_POST, handleWifiConectar);
+  server.on("/wifi/desconectar", HTTP_POST, handleWifiDesconectar);
+  server.on("/wifi/salvar", HTTP_POST, handleWifiSalvar);
+  server.on("/wifi/reset", HTTP_POST, handleWifiReset);
+  server.on("/teste/abrir", HTTP_GET, handleTesteAbrir);
+
   server.begin();
-  Serial.println("[AIRE] Servidor HTTP iniciado na porta 80");
-  
-  // Log inicial
-  logSistema();
-  
-  Serial.println("[AIRE] ✅ Sistema simples pronto!");
-  Serial.println("[AIRE] Acesse: http://" + currentIP + "/discovery");
+
+  Serial.println("[AIRE] Servidor iniciado!");
 }
 
 /* =====================================================
    LOOP
    ===================================================== */
+
 void loop() {
+
   verificarPulsos();
-  atualizarSensores();
-  
-  // Verificar WiFi periodicamente
-  verificarConexaoWiFi();
-  
-  // Anunciar dispositivo periodicamente
-  anunciarDispositivo();
-  
-  // Log periódico
-  if (millis() - ultimoLogSistema > INTERVALO_LOG_SISTEMA) {
-    logSistema();
-    ultimoLogSistema = millis();
+  server.handleClient();
+
+  if (modoConfig && millis() - tempoApCheck >= 5000) {
+    tempoApCheck = millis();
+    ensureAPRunning();
   }
-  
-  // Reset watchdog
-  esp_task_wdt_reset();
-  
-  // LED indica status (ESP32 não tem LED_BUILTIN padrão)
-  const int LED_PIN = 2;
-  const int LED_PIN_EXTERNO = 33;
+
+  if (WiFi.status() == WL_CONNECTED && modoConfig) {
+    modoConfig = false;
+    disableAP();
+    Serial.println("[AIRE] WiFi conectado, desligando o AP do modo configuração.");
+  }
+
+  // Controle do LED
+  unsigned long intervalo;
 
   if (WiFi.status() == WL_CONNECTED) {
-    bool ledState = millis() % 2000 < 1000; // Piscando lento quando conectado
-    digitalWrite(LED_PIN, ledState);
-    digitalWrite(LED_PIN_EXTERNO, ledState);
+    intervalo = 1000;  // pisca lento
   } else {
-    digitalWrite(LED_PIN, millis() % 500 < 250);         // Piscando rápido
-    digitalWrite(LED_PIN_EXTERNO, millis() % 500 < 250); // Piscando rápido
+    intervalo = 250;   // pisca rápido
   }
-  
-  server.handleClient();
-  delay(10);
+
+  if (millis() - tempoLed >= intervalo) {
+    tempoLed = millis();
+    estadoLed = !estadoLed;
+    digitalWrite(2, estadoLed);
+  }
 }

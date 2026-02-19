@@ -359,7 +359,8 @@ async function criarSenhaProvisoriaComUid(
   portaUid: string,
   condominioUid: string,
   bloco: string,
-  apartamento: string
+  apartamento: string,
+  movimentacaoUid?: string | null
 ): Promise<{ uid: string; senha: string }> {
   const senha = await gerarSenhaUnica(condominioUid)
 
@@ -371,7 +372,8 @@ async function criarSenhaProvisoriaComUid(
       bloco,
       apartamento,
       senha,
-      status: 'ATIVA'
+      status: 'ATIVA',
+      movimentacao_uid: movimentacaoUid || null
     })
     .select('uid, senha')
     .single()
@@ -579,6 +581,10 @@ export async function registrarMovimentacao(
             console.warn('[MOV][SERVER] Falha no fallback limit(1) do morador:', e)
           }
         }
+
+        // Regra de negócio: apartamento pode repetir em blocos diferentes.
+        // Se o bloco foi informado e não achou por bloco+apto, NÃO deve tentar apenas pelo apartamento.
+        if (blocoNorm) return null
 
         // Fallback: se não encontrou por bloco+apartamento, tenta apenas pelo apartamento.
         // Só funciona se houver no máximo 1 morador para o apartamento dentro do condomínio.
@@ -1003,6 +1009,10 @@ export async function ocuparPorta(params: {
     const { data, error } = await query.maybeSingle()
     if (!error && data) return data as any
 
+    // Regra de negócio: apartamento pode repetir em blocos diferentes.
+    // Se o bloco foi informado e não achou por bloco+apto, NÃO pode fazer fallback apenas por apartamento.
+    if (blocoCands.length > 0) return null
+
     const { data: rows } = await supabaseServer
       .from(TABLES.moradores)
       .select('nome, whatsapp, email, contatos_adicionais')
@@ -1010,10 +1020,35 @@ export async function ocuparPorta(params: {
       .in('apartamento', aptoCands.length > 0 ? aptoCands : [aptoNorm])
       .eq('ativo', true)
       .eq('deletado', false)
+      .is('bloco', null)
       .order('updated_at', { ascending: false })
       .limit(1)
 
     return (rows as any)?.[0] ?? null
+  }
+
+  const existeMoradorAtivoBlocoApto = async (bloco: string, apartamento: string) => {
+    const aptoNorm = typeof apartamento === 'string' ? apartamento.trim() : ''
+    const blocoNorm = typeof bloco === 'string' ? bloco.trim() : ''
+
+    if (!condominioUid || !blocoNorm || !aptoNorm) return false
+
+    const aptoCands = normalizeAptoCandidates(aptoNorm)
+    const blocoCands = normalizeBlocoCandidates(blocoNorm)
+
+    // Sem fallback por apartamento: aqui precisamos bater exatamente bloco+apto (com normalização).
+    const { data, error } = await supabaseServer
+      .from(TABLES.moradores)
+      .select('uid')
+      .eq('condominio_uid', condominioUid)
+      .in('apartamento', aptoCands.length > 0 ? aptoCands : [aptoNorm])
+      .in('bloco', blocoCands.length > 0 ? blocoCands : [blocoNorm])
+      .eq('ativo', true)
+      .eq('deletado', false)
+      .limit(1)
+
+    if (error) return false
+    return Array.isArray(data) && data.length > 0
   }
 
   // Buscar dados do gaveteiro para a porta
@@ -1049,6 +1084,23 @@ export async function ocuparPorta(params: {
     condominioNome = null
   }
 
+  // Regra de negócio (kiosk/totem): bloquear se não existir morador cadastrado para cada bloco+apto.
+  // Apartamento pode repetir em blocos diferentes, então não há fallback por apartamento.
+  const destinatariosInvalidos: Array<{ bloco: string; apartamento: string }> = []
+  for (const d of destinatarios) {
+    const ok = await existeMoradorAtivoBlocoApto(String(d.bloco || '').trim(), String(d.apartamento || '').trim())
+    if (!ok) destinatariosInvalidos.push({ bloco: String(d.bloco || '').trim(), apartamento: String(d.apartamento || '').trim() })
+  }
+  if (destinatariosInvalidos.length > 0) {
+    const msg =
+      destinatariosInvalidos.length === 1
+        ? `Não existe morador cadastrado (ativo) para Bloco ${destinatariosInvalidos[0].bloco} - Apto ${destinatariosInvalidos[0].apartamento}.`
+        : `Não existem moradores cadastrados (ativos) para: ${destinatariosInvalidos
+            .map(i => `Bloco ${i.bloco} - Apto ${i.apartamento}`)
+            .join('; ')}.`
+    throw new Error(msg)
+  }
+
   // Atualizar status da porta
   await atualizarStatusPorta(portaUid, 'OCUPADO', usuarioUid, blocos, apartamentos, compartilhada)
 
@@ -1056,7 +1108,7 @@ export async function ocuparPorta(params: {
   const movimentacaoUid = await registrarMovimentacao(
     portaUid,
     condominioUid,
-    'OCUPAR',
+    'OCUPADO',
     'OCUPADO',
     usuarioUid,
     'TOTEM',
@@ -1076,13 +1128,16 @@ export async function ocuparPorta(params: {
   for (const dest of destinatarios) {
     const qtd = dest.quantidade || 1
     for (let i = 0; i < qtd; i++) {
+      let senhaUidAtual: string | null = null
       if (totalSenhas === 1) {
-        const created = await criarSenhaProvisoriaComUid(portaUid, condominioUid, dest.bloco, dest.apartamento)
+        const created = await criarSenhaProvisoriaComUid(portaUid, condominioUid, dest.bloco, dest.apartamento, movimentacaoUid)
+        senhaUidAtual = created.uid
         senhaUidUnica = created.uid
         senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha: created.senha })
       } else {
-        const senha = await criarSenhaProvisoria(portaUid, condominioUid, dest.bloco, dest.apartamento)
-        senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha })
+        const created = await criarSenhaProvisoriaComUid(portaUid, condominioUid, dest.bloco, dest.apartamento, movimentacaoUid)
+        senhaUidAtual = created.uid
+        senhas.push({ bloco: dest.bloco, apartamento: dest.apartamento, senha: created.senha })
       }
 
       // Criar registro de entrega
@@ -1092,6 +1147,7 @@ export async function ocuparPorta(params: {
           movimentacao_uid: movimentacaoUid,
           porta_uid: portaUid,
           condominio_uid: condominioUid,
+          senha_uid: senhaUidAtual,
           bloco: dest.bloco,
           apartamento: dest.apartamento,
           quantidade: 1,
@@ -1192,7 +1248,7 @@ export async function cancelarOcupacao(
       .from(TABLES.movimentacoes_porta)
       .select('uid, observacao')
       .eq('porta_uid', portaUid)
-      .eq('acao', 'OCUPAR')
+      .in('acao', ['OCUPAR', 'OCUPADO'])
       .eq('status_resultante', 'OCUPADO')
       .order('timestamp', { ascending: false })
       .limit(1)
@@ -1801,7 +1857,7 @@ export async function obterRelatorioPorta(portaUid: string): Promise<RelatorioPo
     .select('status, ocupado_em, retirado_em')
     .eq('porta_uid', portaUid)
 
-  const totalOcupacoes = movimentacoes?.filter((m: any) => m.acao === 'OCUPAR').length || 0
+  const totalOcupacoes = movimentacoes?.filter((m: any) => m.acao === 'OCUPAR' || m.acao === 'OCUPADO').length || 0
   const totalRetiradas = entregas?.filter((e: any) => e.status === 'RETIRADO').length || 0
   const totalCancelamentos = entregas?.filter((e: any) => e.status === 'CANCELADO').length || 0
 
@@ -1820,7 +1876,7 @@ export async function obterRelatorioPorta(portaUid: string): Promise<RelatorioPo
   const tempoMedioOcupacaoMinutos = countComTempo > 0 ? Math.floor(somaTempoMinutos / countComTempo) : 0
 
   // Última ocupação e retirada
-  const ultimaOcupacao = movimentacoes?.find((m: any) => m.acao === 'OCUPAR')?.timestamp
+  const ultimaOcupacao = movimentacoes?.find((m: any) => m.acao === 'OCUPAR' || m.acao === 'OCUPADO')?.timestamp
   const ultimaRetirada = entregas?.find((e: any) => e.status === 'RETIRADO')?.retirado_em
 
   return {

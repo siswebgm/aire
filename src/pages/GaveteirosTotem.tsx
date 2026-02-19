@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useRouter } from 'next/router'
 import QRCode from 'react-qr-code'
@@ -26,7 +26,9 @@ import {
   Minimize2,
   ShoppingCart,
   ArrowRight,
-  ArrowLeft
+  ArrowLeft,
+  Send,
+  Phone
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -35,6 +37,7 @@ import {
   listarPortas, 
   listarBlocos, 
   listarApartamentos,
+  listarMoradores,
   ocuparPortaViaApi,
   abrirPortaEsp32,
   solicitarAberturaPortaIot,
@@ -42,7 +45,7 @@ import {
   type Destinatario,
   type SenhaDestinatario
 } from '../services/gaveteiroService'
-import type { Gaveteiro, Porta, Bloco, Apartamento } from '../types/gaveteiro'
+import type { Gaveteiro, Porta, Bloco, Apartamento, Morador } from '../types/gaveteiro'
 
 type Etapa = 'inicio' | 'selecionar_bloco' | 'selecionar_apartamento' | 'selecionar_porta' | 'confirmando' | 'sucesso' | 'erro'
 
@@ -81,6 +84,37 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
       console.warn('No router available for navigation')
     }
   }
+
+  const stripLeadingZeros = (v: string) => String(v || '').replace(/^0+(?!$)/, '')
+  const normalizeBlocoCandidates = (bloco?: string | null) => {
+    const blocoNorm = typeof bloco === 'string' ? bloco.trim() : ''
+    if (!blocoNorm) return [] as string[]
+
+    const digits = blocoNorm.match(/\d+/)?.[0] ?? ''
+    const digitsNoZero = digits ? stripLeadingZeros(digits) : ''
+    const digits2 = digitsNoZero ? digitsNoZero.padStart(2, '0') : ''
+
+    return Array.from(
+      new Set(
+        [
+          blocoNorm,
+          stripLeadingZeros(blocoNorm),
+          digits,
+          digitsNoZero,
+          digits2,
+          digits2 ? `Bloco ${digits2}` : '',
+          digitsNoZero ? `Bloco ${digitsNoZero}` : ''
+        ].filter(Boolean)
+      )
+    )
+  }
+
+  const normalizeAptoCandidates = (apto?: string | null) => {
+    const aptoNorm = typeof apto === 'string' ? apto.trim() : ''
+    if (!aptoNorm) return [] as string[]
+    return Array.from(new Set([aptoNorm, stripLeadingZeros(aptoNorm)].filter(Boolean)))
+  }
+
   const isKiosk = mode === 'kiosk'
   const embeddedBleedClass = isKiosk
     ? ''
@@ -148,6 +182,11 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
     }
   ]
   const [protecaoTelaAtiva, setProtecaoTelaAtiva] = useState(false)
+  const [copiadoComprovante, setCopiadoComprovante] = useState(false)
+  const [whatsappEntregador, setWhatsappEntregador] = useState('')
+  const [enviandoWhatsappEntregador, setEnviandoWhatsappEntregador] = useState(false)
+  const [whatsappEntregadorEnviado, setWhatsappEntregadorEnviado] = useState(false)
+  const [whatsappEntregadorErro, setWhatsappEntregadorErro] = useState('')
   const [kioskSlideIndex, setKioskSlideIndex] = useState(0)
   const kioskSlideIndexRef = useRef(0)
   const [kioskSlideAnimating, setKioskSlideAnimating] = useState(false)
@@ -178,6 +217,21 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   const [portas, setPortas] = useState<Porta[]>([])
   const [blocos, setBlocos] = useState<Bloco[]>([])
   const [apartamentos, setApartamentos] = useState<Apartamento[]>([])
+  const [moradores, setMoradores] = useState<Morador[]>([])
+
+  const moradoresIndex = useMemo(() => {
+    const index = new Set<string>()
+    for (const m of moradores) {
+      const blocoCands = normalizeBlocoCandidates((m as any).bloco)
+      const aptoCands = normalizeAptoCandidates((m as any).apartamento)
+      for (const b of blocoCands) {
+        for (const a of aptoCands) {
+          index.add(`${b}::${a}`)
+        }
+      }
+    }
+    return index
+  }, [moradores])
   
   // Seleções - MÚLTIPLOS DESTINATÁRIOS
   const [blocoSelecionado, setBlocoSelecionado] = useState<string>('')
@@ -194,6 +248,7 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   const [mensagemConfirmarFechamento, setMensagemConfirmarFechamento] = useState('')
   const [finalizadoEm, setFinalizadoEm] = useState<number | null>(null)
   const sensorPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const autoConfirmacaoDepositoRef = useRef(false)
   const [depositoDeadline, setDepositoDeadline] = useState<number | null>(null)
   const [depositoRestanteMs, setDepositoRestanteMs] = useState<number>(0)
   
@@ -201,6 +256,8 @@ export default function GaveteirosTotem({ mode = 'kiosk' }: { mode?: 'embedded' 
   const [buscaBloco, setBuscaBloco] = useState('')
   const [buscaApto, setBuscaApto] = useState('')
   const [blocosCarrinhoExpandidos, setBlocosCarrinhoExpandidos] = useState<Set<string>>(new Set())
+  const [mostrarConfirmacaoPorta, setMostrarConfirmacaoPorta] = useState(false)
+  const [portaEmConfirmacao, setPortaEmConfirmacao] = useState<Porta | null>(null)
 
   useEffect(() => {
     if (!isKiosk) return
@@ -622,15 +679,17 @@ useEffect(() => {
     setLoading(true)
     try {
       // Carregar tudo em paralelo para melhor performance
-      const [gaveteirosData, blocosData, apartamentosData] = await Promise.all([
+      const [gaveteirosData, blocosData, apartamentosData, moradoresData] = await Promise.all([
         listarGaveteiros(condominio.uid),
         listarBlocos(condominio.uid),
-        listarApartamentos(condominio.uid)
+        listarApartamentos(condominio.uid),
+        listarMoradores(condominio.uid)
       ])
       
       setGaveteiros(gaveteirosData)
       setBlocos(blocosData)
       setApartamentos(apartamentosData)
+      setMoradores(moradoresData)
       
       // Carregar portas de todos os gaveteiros em paralelo (otimização crítica)
       const portasPromises = gaveteirosData.map(gvt => 
@@ -709,8 +768,78 @@ useEffect(() => {
   const copiarComprovanteTotem = async () => {
     try {
       await navigator.clipboard.writeText(comprovanteUrl)
+      setCopiadoComprovante(true)
+      window.setTimeout(() => setCopiadoComprovante(false), 1800)
     } catch (error) {
       console.warn('[TOTEM] Falha ao copiar comprovante:', error)
+    }
+  }
+
+  const normalizarWhatsappEntregador = (raw: string) => {
+    const digits = String(raw || '').replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.startsWith('55')) return digits
+    return `55${digits}`
+  }
+
+  const formatarTelefone = (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 11)
+    if (digits.length <= 2) return digits
+    if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
+  }
+
+  const handleWhatsappChange = (value: string) => {
+    const formatted = formatarTelefone(value)
+    setWhatsappEntregador(formatted)
+    setWhatsappEntregadorEnviado(false)
+    setWhatsappEntregadorErro('')
+  }
+
+  useEffect(() => {
+    const digits = whatsappEntregador.replace(/\D/g, '')
+    if (digits.length === 11 && !enviandoWhatsappEntregador && !whatsappEntregadorEnviado) {
+      void enviarWhatsappEntregador()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [whatsappEntregador])
+
+  const enviarWhatsappEntregador = async () => {
+    if (enviandoWhatsappEntregador) return
+    setWhatsappEntregadorErro('')
+    setWhatsappEntregadorEnviado(false)
+
+    const whatsapp = normalizarWhatsappEntregador(whatsappEntregador)
+    if (whatsapp.length < 12) {
+      setWhatsappEntregadorErro('Informe um WhatsApp válido com DDD')
+      return
+    }
+
+    setEnviandoWhatsappEntregador(true)
+    try {
+      const response = await fetch('/api/totem/notificar-entregador', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          whatsapp,
+          comprovanteUrl,
+          comprovantePayload,
+          condominioUid: condominio?.uid || null,
+          numeroPorta: portaSelecionadaAtualizada?.numero_porta || null
+        })
+      })
+
+      const data = await response.json().catch(() => null)
+      if (!response.ok || !data?.success) {
+        setWhatsappEntregadorErro(data?.error || 'Não foi possível enviar a notificação')
+        return
+      }
+
+      setWhatsappEntregadorEnviado(true)
+    } catch (error) {
+      setWhatsappEntregadorErro(error instanceof Error ? error.message : 'Não foi possível enviar a notificação')
+    } finally {
+      setEnviandoWhatsappEntregador(false)
     }
   }
 
@@ -874,6 +1003,7 @@ useEffect(() => {
 
     const DEPOSITO_TIMEOUT_MS = 90_000
     const deadline = Date.now() + DEPOSITO_TIMEOUT_MS
+    autoConfirmacaoDepositoRef.current = false
     setDepositoDeadline(deadline)
     setDepositoRestanteMs(DEPOSITO_TIMEOUT_MS)
   }, [etapa, portaSelecionadaAtualizada?.numero_porta, portaSensorFechada, cancelandoOperacao])
@@ -888,7 +1018,9 @@ useEffect(() => {
       setDepositoRestanteMs(restante)
 
       if (restante <= 0) {
-        cancelarOperacaoTotem('Cancelamento automático (tempo esgotado)')
+        if (autoConfirmacaoDepositoRef.current) return
+        autoConfirmacaoDepositoRef.current = true
+        void confirmarFechamentoManual().catch(() => {})
       }
     }
 
@@ -964,39 +1096,6 @@ useEffect(() => {
   const apartamentosFiltrados = apartamentos
     .filter(a => a.bloco_uid === blocos.find(b => b.nome === blocoSelecionado)?.uid)
     .filter(a => a.numero.toLowerCase().includes(buscaApto.toLowerCase()))
-
-  const apartamentosAgrupadosPorAndar = (() => {
-    const getAndar = (numero: string) => {
-      const parsed = Number.parseInt(String(numero).replace(/\D/g, ''), 10)
-      if (Number.isNaN(parsed)) return 0
-      if (parsed < 100) return 0
-      return Math.floor(parsed / 100)
-    }
-
-    const sorted = [...apartamentosFiltrados].sort((a, b) => {
-      const andarA = getAndar(a.numero)
-      const andarB = getAndar(b.numero)
-      if (andarA !== andarB) return andarA - andarB
-
-      const numA = Number.parseInt(String(a.numero).replace(/\D/g, ''), 10)
-      const numB = Number.parseInt(String(b.numero).replace(/\D/g, ''), 10)
-      if (!Number.isNaN(numA) && !Number.isNaN(numB) && numA !== numB) return numA - numB
-
-      return String(a.numero).localeCompare(String(b.numero), 'pt-BR', { numeric: true })
-    })
-
-    const groups = new Map<number, typeof sorted>()
-    for (const apto of sorted) {
-      const andar = getAndar(apto.numero)
-      const prev = groups.get(andar) || []
-      prev.push(apto)
-      groups.set(andar, prev)
-    }
-
-    return Array.from(groups.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([andar, items]) => ({ andar, items }))
-  })()
 
   const selecionarBloco = (nome: string) => {
     setBlocoSelecionado(nome)
@@ -1114,15 +1213,57 @@ useEffect(() => {
     setPortaSelecionada(porta)
   }
 
-  const confirmarOcupacao = async () => {
-    if (!portaSelecionada || !condominio?.uid || destinatarios.length === 0) return
+  const obterDestinoParaConfirmacao = () => {
+    const destinoAtivoValido = destinoAtivo?.bloco && destinoAtivo?.apartamento
+      ? destinoAtivo
+      : null
+
+    if (destinoAtivoValido) {
+      return { bloco: destinoAtivoValido.bloco, apartamento: destinoAtivoValido.apartamento }
+    }
+
+    const primeiro = destinatarios[0]
+    if (!primeiro?.bloco || !primeiro?.apartamento) return null
+    return { bloco: primeiro.bloco, apartamento: primeiro.apartamento }
+  }
+
+  const abrirConfirmacaoPorta = (porta: Porta) => {
+    setPortaEmConfirmacao(porta)
+    setMostrarConfirmacaoPorta(true)
+  }
+
+  const prosseguirConfirmacaoPorta = () => {
+    if (!portaEmConfirmacao) return
+    setMostrarConfirmacaoPorta(false)
+    setPortaSelecionada(portaEmConfirmacao)
+    void confirmarOcupacao(portaEmConfirmacao).catch(() => {})
+    setPortaEmConfirmacao(null)
+  }
+
+  const verificarConfirmacaoPorta = () => {
+    const destino = obterDestinoParaConfirmacao()
+    setMostrarConfirmacaoPorta(false)
+    setPortaEmConfirmacao(null)
+    if (!destino?.bloco) {
+      setEtapa('selecionar_bloco')
+      return
+    }
+    setBlocoSelecionado(destino.bloco)
+    setDestinoAtivo({ bloco: destino.bloco, apartamento: destino.apartamento || '' })
+    setBuscaApto('')
+    setEtapa('selecionar_apartamento')
+  }
+
+  const confirmarOcupacao = async (portaOverride?: Porta) => {
+    const porta = portaOverride ?? portaSelecionada
+    if (!porta || !condominio?.uid || destinatarios.length === 0) return
     
     setProcessando(true)
     setEtapa('confirmando')
     
     // Logs de debug para tablet
     console.log('[TOTEM DEBUG] Iniciando confirmarOcupacao')
-    console.log('[TOTEM DEBUG] portaSelecionada:', portaSelecionada)
+    console.log('[TOTEM DEBUG] portaSelecionada:', porta)
     console.log('[TOTEM DEBUG] condominio?.uid:', condominio?.uid)
     console.log('[TOTEM DEBUG] destinatarios:', destinatarios)
     console.log('[TOTEM DEBUG] User Agent:', navigator.userAgent)
@@ -1145,7 +1286,7 @@ useEffect(() => {
       const tOcuparIni = performance.now()
       const resultado = await promiseWithTimeout(
         ocuparPortaViaApi({
-          portaUid: portaSelecionada.uid,
+          portaUid: porta.uid,
           condominioUid: condominio.uid,
           destinatarios: listaDestinatarios,
           usuarioUid: usuario?.uid,
@@ -1156,10 +1297,16 @@ useEffect(() => {
       )
       console.log('[TOTEM] ocuparPortaViaApi duração(ms):', Math.round(performance.now() - tOcuparIni))
 
+      if (!(resultado as any)?.sucesso) {
+        setMensagemErro((resultado as any)?.error || 'Não foi possível registrar a encomenda.')
+        setEtapa('erro')
+        return
+      }
+
       console.log('[TOTEM] Porta ocupada no banco, preparando para abrir fisicamente...')
 
       // Abrir porta física com token SHA256 (método que funciona)
-      const gaveteiro = (portaSelecionada as any).gaveteiro
+      const gaveteiro = (porta as any).gaveteiro
       console.log('[TOTEM DEBUG] gaveteiro:', gaveteiro)
       console.log('[TOTEM DEBUG] gaveteiro.codigo_hardware:', gaveteiro?.codigo_hardware)
       
@@ -1178,8 +1325,8 @@ useEffect(() => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 condominioUid: condominio.uid,
-                portaUid: portaSelecionada.uid,
-                porta: portaSelecionada.numero_porta
+                portaUid: porta.uid,
+                porta: porta.numero_porta
               }),
               signal: controller.signal
             })
@@ -1197,8 +1344,8 @@ useEffect(() => {
             console.log('[TOTEM] Porta aberta com sucesso (proxy)!')
 
             await atualizarSensorImaPorNumero(
-              portaSelecionada.gaveteiro_uid,
-              portaSelecionada.numero_porta,
+              porta.gaveteiro_uid,
+              porta.numero_porta,
               'aberto'
             ).catch((error) => {
               console.warn('[TOTEM] Falha ao marcar sensor como aberto:', error)
@@ -1206,7 +1353,7 @@ useEffect(() => {
 
             if ('speechSynthesis' in window) {
               const utterance = new SpeechSynthesisUtterance(
-                `Porta ${portaSelecionada.numero_porta} está aberta. Deposite sua mercadoria.`
+                `Porta ${porta.numero_porta} está aberta. Deposite sua mercadoria.`
               )
               utterance.lang = 'pt-BR'
               utterance.rate = 1.8
@@ -1249,7 +1396,7 @@ useEffect(() => {
         }
       } else {
         console.warn('[TOTEM] Porta não possui gaveteiro.codigo_hardware')
-        console.log('[TOTEM] portaSelecionada:', portaSelecionada)
+        console.log('[TOTEM] portaSelecionada:', porta)
       }
 
       setSenhasGeradas((resultado as any).senhas)
@@ -1272,6 +1419,9 @@ useEffect(() => {
     setMensagemErro('')
     setBuscaBloco('')
     setBuscaApto('')
+    setWhatsappEntregador('')
+    setWhatsappEntregadorEnviado(false)
+    setWhatsappEntregadorErro('')
     setEtapa(isKiosk ? 'inicio' : 'selecionar_bloco')
     carregarDados()
   }
@@ -1356,7 +1506,7 @@ useEffect(() => {
         )}
 
         <div className="flex-1 min-h-0 w-full flex items-center justify-center">
-          <div className="w-full max-w-6xl">
+          <div className={`w-full transition-all ${portaSensorFechada ? 'max-w-lg' : 'max-w-5xl'}`}>
             <div className={`rounded-[32px] border shadow-xl overflow-hidden bg-gradient-to-br ${
               portaSensorFechada
                 ? 'from-emerald-50 via-white to-white border-emerald-100'
@@ -1364,10 +1514,100 @@ useEffect(() => {
                   ? 'from-amber-50 via-white to-white border-amber-100'
                   : 'from-sky-50 via-white to-white border-sky-100'
             }`}>
-              <div className="grid grid-cols-12 min-h-[420px]">
-                <div className="col-span-12 lg:col-span-7 p-7 flex flex-col">
-                  {!portaSensorFechada ? (
-                    <>
+              {portaSensorFechada ? (
+                <div className="px-8 py-8 flex flex-col items-center">
+                  {/* Header */}
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
+                      <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold tracking-[0.2em] text-emerald-600 uppercase">Sucesso</div>
+                      <div className="text-xl font-extrabold tracking-tight text-slate-900">Entrega confirmada</div>
+                    </div>
+                  </div>
+
+                  {/* Comprovante + WhatsApp */}
+                  <div className="w-full mt-6 space-y-4">
+                    {/* QR row */}
+                    <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                      <div className="shrink-0 rounded-xl bg-white p-1.5 border border-slate-100">
+                        <QRCode value={comprovanteUrl} size={72} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-slate-800">Comprovante</div>
+                        <button
+                          type="button"
+                          onClick={copiarComprovanteTotem}
+                          className={`mt-1.5 inline-flex items-center gap-1.5 text-xs font-bold transition-colors ${
+                            copiadoComprovante ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          {copiadoComprovante ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          {copiadoComprovante ? 'Copiado!' : 'Copiar link'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* WhatsApp — destaque */}
+                    <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/50 p-4 shadow-sm">
+                      <div className="flex items-center gap-2.5 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
+                          <Phone className="w-3.5 h-3.5 text-white" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-extrabold text-emerald-900">Notificar entregador</div>
+                          <div className="text-[11px] text-emerald-700/70">Informe o WhatsApp para enviar o comprovante</div>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          value={whatsappEntregador}
+                          onChange={e => handleWhatsappChange(e.target.value)}
+                          inputMode="tel"
+                          placeholder="(00) 00000-0000"
+                          disabled={whatsappEntregadorEnviado}
+                          className={`h-12 w-full rounded-xl border px-4 text-base font-bold placeholder:text-slate-300 focus:outline-none focus:ring-2 transition-all ${
+                            whatsappEntregadorErro
+                              ? 'border-rose-300 bg-rose-50/60 focus:ring-rose-200 text-rose-900'
+                              : whatsappEntregadorEnviado
+                                ? 'border-emerald-300 bg-white text-emerald-800'
+                                : 'border-emerald-200 bg-white focus:ring-emerald-300'
+                          }`}
+                        />
+                        {enviandoWhatsappEntregador ? (
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                          </div>
+                        ) : whatsappEntregadorEnviado ? (
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                          </div>
+                        ) : null}
+                      </div>
+                      {whatsappEntregadorErro ? (
+                        <div className="mt-2 text-xs font-semibold text-rose-600">{whatsappEntregadorErro}</div>
+                      ) : whatsappEntregadorEnviado ? (
+                        <div className="mt-2 text-xs font-semibold text-emerald-700">Notificação enviada com sucesso.</div>
+                      ) : (
+                        <div className="mt-2 text-[11px] text-emerald-600/60">Envio automático ao completar o número.</div>
+                      )}
+                    </div>
+
+                    {/* Finalizar */}
+                    <button
+                      type="button"
+                      onClick={reiniciar}
+                      className="w-full h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700 text-lg"
+                    >
+                      <Package className="w-5 h-5" />
+                      Finalizar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+              <div className="grid grid-cols-12 min-h-[380px]">
+                <div className="col-span-12 lg:col-span-7 p-6 flex flex-col">
                       <div className="flex items-start justify-between gap-6">
                         <div className="min-w-0">
                           <div className="text-xs font-extrabold tracking-[0.18em] text-slate-400">OPERAÇÃO DO TOTEM</div>
@@ -1391,7 +1631,7 @@ useEffect(() => {
                         </div>
                       </div>
 
-                      <div className="mt-7 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
+                      <div className="mt-5 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
                         <div className="text-2xl font-extrabold tracking-tight text-slate-900">
                           Deposite a mercadoria no gaveteiro
                         </div>
@@ -1406,179 +1646,69 @@ useEffect(() => {
                           </div>
                         ) : null}
                       </div>
-                    </>
-                  ) : (
-                    <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm px-6 py-6">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-4">
-                          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
-                            <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
-                          </div>
-                          <div>
-                            <div className="text-xs font-extrabold tracking-[0.18em] text-emerald-700">PROCESSO CONCLUÍDO</div>
-                            <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Tudo finalizado com sucesso</div>
-                            <div className="text-sm font-semibold text-emerald-900/80">Guarde o comprovante (QRCode) para sua garantia.</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
-                  {portaSensorFechada ? (
-                    <div className="mt-7 rounded-3xl border border-slate-200 bg-white/85 shadow-sm p-6">
-                      <div className="text-sm font-extrabold tracking-tight text-slate-900">Confirmação do processo</div>
-                      <div className="mt-1 text-xs font-semibold text-slate-600">Tudo foi registrado e está pronto para comprovação.</div>
-
-                      <div className="mt-4 grid gap-3">
-                        <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-                          <CheckCircle2 className="w-5 h-5 text-emerald-700 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-extrabold text-emerald-950">Porta fechada confirmada</div>
-                            <div className="text-xs font-semibold text-emerald-900/80">Operação concluída com sucesso no totem.</div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                          <CheckCircle2 className="w-5 h-5 text-slate-600 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-extrabold text-slate-900">Comprovante disponível</div>
-                            <div className="text-xs font-semibold text-slate-600">Escaneie o QRCode à direita para visualizar os detalhes.</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3">
-                        <div className="text-xs font-extrabold tracking-wide text-sky-900">DICA</div>
-                        <div className="mt-1 text-xs font-semibold text-sky-900/80">Abra a câmera do celular e aponte para o QRCode. O comprovante abrirá automaticamente.</div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-auto pt-6">
-                    {!portaSensorFechada && mensagemConfirmarFechamento ? (
+                  <div className="mt-6">
+                    {mensagemConfirmarFechamento ? (
                       <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
                         {mensagemConfirmarFechamento}
                       </div>
                     ) : null}
 
-                    <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
-                      <div className="flex flex-col gap-3">
-                        {portaSensorFechada ? (
+                      <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-[1.4fr_1fr] gap-3">
                           <button
                             type="button"
-                            onClick={reiniciar}
-                            className="h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700"
+                            onClick={confirmarFechamentoManual}
+                            disabled={cancelandoOperacao || confirmandoFechamento}
+                            className="relative h-12 w-full rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold flex items-center justify-center shadow-lg hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-50 overflow-hidden"
                           >
-                            <Package className="w-5 h-5" />
-                            Encerrar e voltar ao início
-                          </button>
-                        ) : (
-                          <div className="h-14 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 font-extrabold flex items-center justify-center gap-2">
-                            <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-                            <span>Aguardando fechar</span>
-                            <span className="inline-flex w-6 justify-start">
-                              <span className="animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
-                              <span className="animate-pulse" style={{ animationDelay: '200ms' }}>.</span>
-                              <span className="animate-pulse" style={{ animationDelay: '400ms' }}>.</span>
+                            {depositoDeadline && !confirmandoFechamento ? (
+                              <div
+                                className="absolute bottom-0 left-0 h-1 bg-white/35"
+                                style={{ width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%` }}
+                              />
+                            ) : null}
+                            <span className="w-full px-4 inline-flex items-center justify-between gap-3">
+                              <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                                <CheckCircle2 className={`w-5 h-5 ${confirmandoFechamento ? 'animate-pulse' : ''}`} />
+                                {confirmandoFechamento ? 'Confirmando...' : 'Confirmar entrega'}
+                              </span>
+                              {depositoDeadline && !confirmandoFechamento ? (
+                                <span className="inline-flex items-center h-7 px-2.5 rounded-full bg-white/15 text-white text-sm font-extrabold tabular-nums whitespace-nowrap">
+                                  {formatarTempo(depositoRestanteMs)}
+                                </span>
+                              ) : null}
                             </span>
-                          </div>
-                        )}
+                          </button>
 
-                        {!portaSensorFechada ? (
-                          <div className="grid grid-cols-2 gap-3">
-                            <button
-                              type="button"
-                              onClick={confirmarFechamentoManual}
-                              disabled={cancelandoOperacao || confirmandoFechamento}
-                              className="h-12 rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold flex items-center justify-center gap-2 shadow-lg hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-50"
-                            >
-                              <CheckCircle2 className={`w-5 h-5 ${confirmandoFechamento ? 'animate-pulse' : ''}`} />
-                              {confirmandoFechamento ? 'Confirmando...' : 'Confirmei o fechamento'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => cancelarOperacaoTotem('Cancelamento pelo entregador (Totem)')}
-                              disabled={cancelandoOperacao || confirmandoFechamento}
-                              className="h-12 rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
-                            >
-                              <RotateCcw className="w-5 h-5" />
-                              Cancelar
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="h-12 flex items-center justify-center">
-                            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 text-emerald-900 border border-emerald-200 text-sm font-extrabold">
-                              <CheckCircle2 className="w-4 h-4" />
-                              Operação confirmada e finalizada
-                            </div>
-                          </div>
-                        )}
+                          <button
+                            type="button"
+                            onClick={() => cancelarOperacaoTotem('Cancelamento pelo entregador (Totem)')}
+                            disabled={cancelandoOperacao || confirmandoFechamento}
+                            className="h-12 w-full rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                          >
+                            <RotateCcw className="w-5 h-5" />
+                            <span className="whitespace-nowrap">Cancelar</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
                   </div>
                 </div>
 
                 <div className="col-span-12 lg:col-span-5 bg-gradient-to-b from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-7 flex flex-col">
-                  {!portaSensorFechada ? (
                     <div className="flex-1 flex flex-col">
                       <div className="flex-1 rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center p-6">
                         <img
                           src="/3_delivery%20(1).gif"
                           alt=""
-                          className="w-[360px] max-w-full h-auto max-h-[260px] object-contain"
+                          className="w-[360px] max-w-full h-auto max-h-[240px] object-contain"
                           aria-hidden="true"
                         />
                       </div>
-
-                      {!portaSensorFechada && depositoDeadline ? (
-                        <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-5">
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs font-extrabold tracking-wide text-slate-500">TEMPO PARA FECHAR</div>
-                            <div className="text-sm font-extrabold tabular-nums text-slate-900">{formatarTempo(depositoRestanteMs)}</div>
-                          </div>
-                          <div className="mt-3 h-3 w-full rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-amber-500 to-rose-500 transition-[width]"
-                              style={{
-                                width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%`
-                              }}
-                            />
-                          </div>
-                          <div className="mt-2 text-[11px] font-semibold text-slate-500">
-                            Se não fechar em 1:30, a operação será cancelada automaticamente.
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col">
-                      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm p-5">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-xs font-extrabold tracking-wide text-emerald-700">SUCESSO</div>
-                            <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Entrega registrada com sucesso</div>
-                            <div className="mt-1 text-sm font-semibold text-emerald-900/90">Use o QRCode como comprovante do processo.</div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={copiarComprovanteTotem}
-                            className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-2xl border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100/40 text-xs font-extrabold"
-                          >
-                            <Copy className="w-4 h-4" />
-                            Copiar
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-6 flex items-center justify-center">
-                        <div className="rounded-3xl border border-slate-200 bg-white p-4">
-                          <QRCode value={comprovanteUrl} size={220} />
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -1594,6 +1724,109 @@ useEffect(() => {
         isFullscreen || isKiosk ? 'bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900' : 'bg-slate-50'
       }`}
     >
+      {mostrarConfirmacaoPorta && portaEmConfirmacao && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-950/40"
+            onClick={() => {
+              setMostrarConfirmacaoPorta(false)
+              setPortaEmConfirmacao(null)
+            }}
+          />
+          <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900">Confirmar destino</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-600">Confira o carrinho</div>
+                </div>
+
+                <div className="shrink-0">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-[11px] font-extrabold tracking-[0.18em] text-slate-500">PORTA</div>
+                    <div className="h-9 w-9 rounded-full bg-slate-900 text-white flex items-center justify-center text-lg font-extrabold tabular-nums">
+                      {portaEmConfirmacao.numero_porta}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {(() => {
+                const itens = destinatarios
+                  .map(d => ({
+                    bloco: String(d.bloco || ''),
+                    apartamento: String(d.apartamento || ''),
+                    quantidade: Math.max(1, Number(d.quantidade || 1))
+                  }))
+                  .filter(i => i.bloco && i.apartamento)
+                  .sort((a, b) => {
+                    const byBloco = a.bloco.localeCompare(b.bloco, undefined, { numeric: true })
+                    if (byBloco !== 0) return byBloco
+                    return a.apartamento.localeCompare(b.apartamento, undefined, { numeric: true })
+                  })
+
+                const totalItens = itens.reduce((sum, i) => sum + (i.quantidade || 0), 0)
+
+                return (
+                  <div className="mt-5 rounded-2xl border border-slate-200 bg-white">
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+                      <div className="text-sm font-extrabold text-slate-900">Carrinho</div>
+                      <div className="text-sm font-semibold text-slate-600 tabular-nums">{totalItens} item(ns)</div>
+                    </div>
+
+                    <div className="px-4 py-3">
+                      <div className="grid grid-cols-[1fr_1fr_auto] gap-3 text-[11px] font-extrabold tracking-[0.18em] text-slate-400">
+                        <div>BLOCO</div>
+                        <div>APTO</div>
+                        <div className="text-right">QTD</div>
+                      </div>
+
+                      <div className="mt-2 grid gap-2 max-h-[240px] overflow-y-auto pr-1">
+                        {itens.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+                            Carrinho vazio.
+                          </div>
+                        ) : (
+                          itens.map((i, idx) => (
+                            <div
+                              key={`${i.bloco}::${i.apartamento}::${idx}`}
+                              className="grid grid-cols-[1fr_1fr_auto] gap-3 items-center rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+                            >
+                              <div className="text-base font-extrabold text-slate-900 tabular-nums">{i.bloco}</div>
+                              <div className="text-base font-extrabold text-slate-900 tabular-nums">{i.apartamento}</div>
+                              <div className="text-base font-extrabold text-slate-900 tabular-nums text-right">{i.quantidade}</div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="mt-4 text-sm font-semibold text-slate-700">Está correto?</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-500">Toque em Verificar para corrigir bloco/apartamento.</div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={verificarConfirmacaoPorta}
+                  className="h-12 rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold hover:bg-slate-50 transition-colors"
+                >
+                  Verificar
+                </button>
+                <button
+                  type="button"
+                  onClick={prosseguirConfirmacaoPorta}
+                  className="h-12 rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold hover:from-emerald-700 hover:to-green-700 transition-all"
+                >
+                  Prosseguir
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {isKiosk && protecaoTelaAtiva && (
         <div
           className="fixed inset-0 z-[100] text-white bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900"
@@ -1982,7 +2215,7 @@ useEffect(() => {
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4">
 
         {/* Carrinho lateral - mobile first */}
-        {destinatarios.length > 0 && etapa !== 'sucesso' && etapa !== 'erro' && etapa !== 'confirmando' && (
+        {etapa !== 'sucesso' && etapa !== 'erro' && (
           <div className="lg:hidden order-2 bg-white rounded-2xl shadow-xl p-4">
             <div className="pb-3 mb-3 border-b border-gray-100">
               <div className="flex items-start justify-between gap-3">
@@ -2001,43 +2234,50 @@ useEffect(() => {
             
             {/* Lista simplificada para mobile */}
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {(() => {
-                const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
-                return blocosUnicos.map(bloco => {
-                  const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
-                  const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
-                  return (
-                    <div
-                      key={bloco}
-                      className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-200"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Building2 className="w-4 h-4 text-sky-500" />
-                        <span className="font-extrabold text-gray-900 text-sm">{bloco}</span>
-                        <span className="text-xs text-gray-500">({aptosDoBloco.length} aptos)</span>
+              {destinatarios.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
+                  <div className="text-sm font-extrabold text-slate-800">Carrinho vazio</div>
+                  <div className="mt-1 text-xs text-slate-500">Selecione um apartamento para adicionar.</div>
+                </div>
+              ) : (
+                (() => {
+                  const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
+                  return blocosUnicos.map(bloco => {
+                    const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
+                    const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
+                    return (
+                      <div
+                        key={bloco}
+                        className="flex items-center justify-between p-2 rounded-lg bg-gray-50 border border-gray-200"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4 text-sky-500" />
+                          <span className="font-extrabold text-gray-900 text-sm">{bloco}</span>
+                          <span className="text-xs text-gray-500">({aptosDoBloco.length} aptos)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="bg-sky-100 text-sky-700 text-xs font-bold px-2 py-1 rounded-full">
+                            {totalBloco}
+                          </span>
+                          <button
+                            onClick={() => removerBlocoDoCarrinho(bloco)}
+                            className="text-red-500 hover:bg-red-50 p-1 rounded"
+                            title="Remover bloco"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="bg-sky-100 text-sky-700 text-xs font-bold px-2 py-1 rounded-full">
-                          {totalBloco}
-                        </span>
-                        <button
-                          onClick={() => removerBlocoDoCarrinho(bloco)}
-                          className="text-red-500 hover:bg-red-50 p-1 rounded"
-                          title="Remover bloco"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })
-              })()}
+                    )
+                  })
+                })()
+              )}
             </div>
           </div>
         )}
 
         {/* Carrinho desktop */}
-        {destinatarios.length > 0 && etapa !== 'sucesso' && etapa !== 'erro' && etapa !== 'confirmando' && (
+        {etapa !== 'sucesso' && etapa !== 'erro' && (
           <div className="hidden lg:block lg:w-64 lg:shrink-0 bg-white rounded-2xl shadow-xl p-4 flex flex-col order-last min-h-0 h-full overflow-y-auto">
             <div className="pb-3 mb-3 border-b border-gray-100">
               <div className="flex items-start justify-between gap-3">
@@ -2056,165 +2296,178 @@ useEffect(() => {
             
             {/* Lista agrupada por bloco */}
             <div className="space-y-3 pb-3">
-              {(() => {
-                const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
-                return blocosUnicos.map(bloco => {
-                  const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
-                  const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
-                  const aptosOrdenados = [...aptosDoBloco]
-                    .map(d => d.apartamento)
-                    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+              {destinatarios.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
+                  <div className="text-sm font-extrabold text-slate-800">Carrinho vazio</div>
+                  <div className="mt-1 text-xs text-slate-500">Selecione um apartamento para adicionar.</div>
+                </div>
+              ) : (
+                (() => {
+                  const blocosUnicos = Array.from(new Set(destinatarios.map(d => d.bloco)))
+                  return blocosUnicos.map(bloco => {
+                    const aptosDoBloco = destinatarios.filter(d => d.bloco === bloco)
+                    const totalBloco = aptosDoBloco.reduce((sum, d) => sum + (d.quantidade || 0), 0)
+                    const aptosOrdenados = [...aptosDoBloco]
+                      .map(d => d.apartamento)
+                      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 
-                  const blocoAtivo = blocoSelecionado === bloco
-                    || destinoAtivo?.bloco === bloco
+                    const blocoAtivo = blocoSelecionado === bloco
+                      || destinoAtivo?.bloco === bloco
 
-                  const expanded = blocosCarrinhoExpandidos.has(bloco)
-                  const MAX_APTOS_VISIVEIS = 6
-                  const aptosVisiveis = expanded ? aptosOrdenados : aptosOrdenados.slice(0, MAX_APTOS_VISIVEIS)
-                  const restantes = Math.max(0, aptosOrdenados.length - aptosVisiveis.length)
-                  return (
-                    <div
-                      key={bloco}
-                      className={`rounded-xl p-2 cursor-pointer transition-all border ${
-                        blocoAtivo
-                          ? 'bg-sky-50 border-sky-300 ring-2 ring-sky-200 shadow-sm border-l-4 border-l-sky-500'
-                          : 'bg-gray-50 border-transparent hover:bg-gray-100'
-                      }`}
-                      onClick={() => {
-                        setBlocoSelecionado(bloco)
-                        setDestinoAtivo({ bloco, apartamento: '' })
-                        setBuscaApto('')
-                        setEtapa('selecionar_apartamento')
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Building2 className="w-4 h-4 text-sky-500" />
-                          <span className="font-extrabold text-gray-900 text-sm">{bloco}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`inline-flex items-center h-6 px-2 rounded-full text-[11px] font-extrabold tabular-nums border ${
-                            blocoAtivo
-                              ? 'bg-white text-sky-700 border-sky-200'
-                              : 'bg-white text-slate-700 border-slate-200'
-                          }`}>
-                            {totalBloco}
-                          </span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              removerBlocoDoCarrinho(bloco)
-                            }}
-                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title="Remover bloco"
-                            aria-label="Remover bloco"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {aptosVisiveis.map((apto, idx) => {
-                          const globalIdx = destinatarios.findIndex(d => d.bloco === bloco && d.apartamento === apto)
-                          const qtd = destinatarios[globalIdx]?.quantidade || 1
-                          const aptoAtivo = destinoAtivo?.bloco === bloco && destinoAtivo?.apartamento === apto
-                          return (
-                            <div
-                              key={idx}
-                              className={`flex items-center gap-1.5 rounded-xl border px-2 py-1 text-xs w-full shadow-sm transition-colors ${
-                                aptoAtivo
-                                  ? 'bg-sky-50 border-sky-600 ring-1 ring-sky-300'
-                                  : blocoAtivo
-                                    ? 'bg-white border-sky-200'
-                                    : 'bg-white border-slate-200'
-                              }`}
+                    const expanded = blocosCarrinhoExpandidos.has(bloco)
+                    const MAX_APTOS_VISIVEIS = 6
+                    const aptosVisiveis = expanded ? aptosOrdenados : aptosOrdenados.slice(0, MAX_APTOS_VISIVEIS)
+                    const restantes = Math.max(0, aptosOrdenados.length - aptosVisiveis.length)
+                    return (
+                      <div
+                        key={bloco}
+                        className={`rounded-xl p-2 cursor-pointer transition-all border ${
+                          blocoAtivo
+                            ? 'bg-sky-50 border-sky-300 ring-2 ring-sky-200 shadow-sm border-l-4 border-l-sky-500'
+                            : 'bg-gray-50 border-transparent hover:bg-gray-100'
+                        }`}
+                        onClick={() => {
+                          setBlocoSelecionado(bloco)
+                          setDestinoAtivo({ bloco, apartamento: '' })
+                          setBuscaApto('')
+                          setEtapa('selecionar_apartamento')
+                        }}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-sky-500" />
+                            <span className="font-extrabold text-gray-900 text-sm">{bloco}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`inline-flex items-center h-6 px-2 rounded-full text-[11px] font-extrabold tabular-nums border ${
+                              blocoAtivo
+                                ? 'bg-white text-sky-700 border-sky-200'
+                                : 'bg-white text-slate-700 border-slate-200'
+                            }`}>
+                              {totalBloco}
+                            </span>
+                            <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                setDestinoAtivo({ bloco, apartamento: apto })
+                                removerBlocoDoCarrinho(bloco)
                               }}
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Remover bloco"
+                              aria-label="Remover bloco"
                             >
-                              <div className="min-w-0 flex-1 grid grid-cols-[minmax(44px,1fr)_auto] grid-rows-[auto_auto] gap-x-1 gap-y-0 items-center">
-                                <div className="text-[8px] font-extrabold tracking-wide text-slate-400">APT</div>
-                                <div className="text-[8px] font-extrabold tracking-wide text-slate-400 text-center">QTD</div>
-
-                                <div className="min-w-0 pr-1">
-                                  <div className="text-[14px] sm:text-[15px] font-extrabold text-slate-900 leading-none whitespace-nowrap">{apto}</div>
-                                </div>
-
-                                <div className="inline-flex items-center justify-center gap-0.5 rounded-lg border border-sky-200 bg-sky-50 px-0.5 py-0 font-extrabold text-sky-800">
-                                  <button
-                                    type="button"
-                                    onClick={() => decrementarDestinatario(bloco, apto)}
-                                    className="w-6 h-6 sm:w-7 sm:h-7 text-[15px] rounded-md flex items-center justify-center hover:bg-sky-100/70"
-                                    aria-label="Diminuir quantidade"
-                                  >
-                                    −
-                                  </button>
-                                  <span className="min-w-[26px] text-center text-xs tabular-nums">{qtd}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => incrementarDestinatario(bloco, apto)}
-                                    className="w-6 h-6 sm:w-7 sm:h-7 text-[15px] rounded-md flex items-center justify-center hover:bg-sky-100/70"
-                                    aria-label="Aumentar quantidade"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                              </div>
-                              <button
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {aptosVisiveis.map((apto, idx) => {
+                            const globalIdx = destinatarios.findIndex(d => d.bloco === bloco && d.apartamento === apto)
+                            const qtd = destinatarios[globalIdx]?.quantidade || 1
+                            const aptoAtivo = destinoAtivo?.bloco === bloco && destinoAtivo?.apartamento === apto
+                            return (
+                              <div
+                                key={idx}
+                                className={`flex items-center gap-1.5 rounded-xl border px-2 py-1 text-xs w-full shadow-sm transition-colors ${
+                                  aptoAtivo
+                                    ? 'bg-sky-50 border-sky-600 ring-1 ring-sky-300'
+                                    : blocoAtivo
+                                      ? 'bg-white border-sky-200'
+                                      : 'bg-white border-slate-200'
+                                }`}
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  removerDestinatarioCompleto(bloco, apto)
+                                  setDestinoAtivo({ bloco, apartamento: apto })
                                 }}
-                                className="ml-1 w-8 h-8 sm:w-9 sm:h-9 inline-flex items-center justify-center rounded-lg border border-transparent text-slate-500 hover:text-red-600 hover:bg-red-50 hover:border-red-100 transition-colors"
-                                aria-label="Remover apartamento"
                               >
-                                <XCircle size={18} />
-                              </button>
-                            </div>
-                          )
-                        })}
+                                <div className="min-w-0 flex-1 grid grid-cols-[minmax(44px,1fr)_auto] grid-rows-[auto_auto] gap-x-1 gap-y-0 items-center">
+                                  <div className="text-[8px] font-extrabold tracking-wide text-slate-400">APT</div>
+                                  <div className="text-[8px] font-extrabold tracking-wide text-slate-400 text-center">QTD</div>
 
-                        {restantes > 0 && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleCarrinhoBloco(bloco)
-                            }}
-                            className="px-2 py-1 text-xs font-semibold text-sky-600 hover:text-sky-700 hover:bg-sky-50 rounded border border-sky-100"
-                          >
-                            Ver mais (+{restantes})
-                          </button>
-                        )}
+                                  <div className="min-w-0 pr-1">
+                                    <div className="text-[14px] sm:text-[15px] font-extrabold text-slate-900 leading-none whitespace-nowrap">{apto}</div>
+                                  </div>
 
-                        {expanded && aptosOrdenados.length > MAX_APTOS_VISIVEIS && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleCarrinhoBloco(bloco)
-                            }}
-                            className="px-2 py-1 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded border border-slate-200"
-                          >
-                            Ver menos
-                          </button>
-                        )}
+                                  <div className="inline-flex items-center justify-center gap-0.5 rounded-lg border border-sky-200 bg-sky-50 px-0.5 py-0 font-extrabold text-sky-800">
+                                    <button
+                                      type="button"
+                                      onClick={() => decrementarDestinatario(bloco, apto)}
+                                      className="w-6 h-6 sm:w-7 sm:h-7 text-[15px] rounded-md flex items-center justify-center hover:bg-sky-100/70"
+                                      aria-label="Diminuir quantidade"
+                                    >
+                                      −
+                                    </button>
+                                    <span className="min-w-[26px] text-center text-xs tabular-nums">{qtd}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => incrementarDestinatario(bloco, apto)}
+                                      className="w-6 h-6 sm:w-7 sm:h-7 text-[15px] rounded-md flex items-center justify-center hover:bg-sky-100/70"
+                                      aria-label="Aumentar quantidade"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    removerDestinatarioCompleto(bloco, apto)
+                                  }}
+                                  className="ml-1 w-8 h-8 sm:w-9 sm:h-9 inline-flex items-center justify-center rounded-lg border border-transparent text-slate-500 hover:text-red-600 hover:bg-red-50 hover:border-red-100 transition-colors"
+                                  aria-label="Remover apartamento"
+                                >
+                                  <XCircle size={18} />
+                                </button>
+                              </div>
+                            )
+                          })}
+
+                          {restantes > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleCarrinhoBloco(bloco)
+                              }}
+                              className="px-2 py-1 text-xs font-semibold text-sky-600 hover:text-sky-700 hover:bg-sky-50 rounded border border-sky-100"
+                            >
+                              Ver mais (+{restantes})
+                            </button>
+                          )}
+
+                          {expanded && aptosOrdenados.length > MAX_APTOS_VISIVEIS && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleCarrinhoBloco(bloco)
+                              }}
+                              className="px-2 py-1 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded border border-slate-200"
+                            >
+                              Ver menos
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )
-                })
-              })()}
+                    )
+                  })
+                })()
+              )}
             </div>
             
             {/* Botões do carrinho */}
             <div className="mt-3 pt-3 border-t border-gray-200">
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={etapa === 'selecionar_porta' ? confirmarOcupacao : irParaSelecaoPorta}
-                  disabled={etapa === 'selecionar_porta' && !portaSelecionada}
+                  onClick={() => {
+                    if (etapa === 'selecionar_porta') {
+                      void confirmarOcupacao().catch(() => {})
+                      return
+                    }
+                    irParaSelecaoPorta()
+                  }}
+                  disabled={destinatarios.length === 0 || (etapa === 'selecionar_porta' && !portaSelecionada)}
                   className={`col-span-1 px-4 sm:px-3 py-3 sm:py-2 font-semibold rounded-lg transition-all flex items-center justify-center gap-2 text-sm sm:text-base whitespace-nowrap ${
-                    etapa === 'selecionar_porta' && !portaSelecionada
+                    destinatarios.length === 0 || (etapa === 'selecionar_porta' && !portaSelecionada)
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                       : 'bg-green-500 text-white hover:bg-green-600'
                   }`}
@@ -2248,7 +2501,9 @@ useEffect(() => {
                 <div className="w-9 h-9 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center">
                   <Building2 className="w-5 h-5 text-sky-600" />
                 </div>
-                <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">Qual bloco?</h2>
+                <h2 className="relative text-xl sm:text-2xl font-black tracking-tight text-slate-900 after:content-[''] after:absolute after:-bottom-1 after:left-0 after:h-1 after:w-12 after:rounded-full after:bg-sky-500">
+                  Qual bloco?
+                </h2>
               </div>
             </div>
             {/* Grid de blocos */}
@@ -2302,13 +2557,15 @@ useEffect(() => {
         {/* ETAPA 2: Selecionar Apartamento */}
         {etapa === 'selecionar_apartamento' && (
           <div className="p-4 flex-1 flex flex-col min-h-0">
-            <div className="flex items-center justify-between gap-3 mb-3 flex-shrink-0">
+            <div className="flex items-center justify-between gap-3 mb-5 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-sky-50 border border-sky-100 flex items-center justify-center">
                   <Home className="w-5 h-5 text-sky-600" />
                 </div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">Qual apartamento?</h2>
+                  <h2 className="relative text-xl sm:text-2xl font-black tracking-tight text-slate-900 after:content-[''] after:absolute after:-bottom-1 after:left-0 after:h-1 after:w-12 after:rounded-full after:bg-sky-500">
+                    Qual apartamento?
+                  </h2>
                   {blocoSelecionado && (
                     <span className="inline-flex items-center h-7 px-2.5 rounded-full border border-sky-200 bg-sky-50 text-sky-800 text-xs font-extrabold">
                       {(blocoSelecionado.trim().toLowerCase().startsWith('bloco')
@@ -2330,68 +2587,64 @@ useEffect(() => {
             {/* Grid de apartamentos com scroll */}
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               <div className="flex flex-col gap-3 pb-2">
-                {apartamentosAgrupadosPorAndar.map(({ andar, items }) => (
-                  <div key={andar} id={`andar-${andar}`} className="pb-2 border-b border-slate-100 last:border-b-0">
-                    <div className="mb-2 flex items-center justify-between px-1">
-                      <div className="text-xs font-extrabold tracking-wide text-slate-600">
-                        {andar === 0 ? 'Térreo' : `${andar}º andar`}
-                      </div>
-                      <div className="text-[11px] font-extrabold tabular-nums text-slate-400">
-                        {items.length}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(56px,1fr))] sm:grid-cols-[repeat(auto-fit,minmax(60px,1fr))] lg:grid-cols-[repeat(auto-fit,minmax(64px,1fr))] gap-1 content-start">
-                      {items.map((apto) => {
-                        const jaAdicionado = destinatarios.some(
-                          d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
-                        )
-                        const qtdSelecionada = destinatarios.find(
-                          d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
-                        )?.quantidade
-                        const aptoAtivo = destinoAtivo?.bloco === blocoSelecionado && destinoAtivo?.apartamento === apto.numero
-                        return (
-                          <button
-                            key={apto.uid}
-                            onClick={() => {
-                              const existe = destinatarios.some(d => d.bloco === blocoSelecionado && d.apartamento === apto.numero)
-                              if (!existe) {
-                                setDestinoAtivo({ bloco: blocoSelecionado, apartamento: apto.numero })
-                              } else if (aptoAtivo) {
-                                setDestinoAtivo({ bloco: blocoSelecionado, apartamento: '' })
-                              }
-                              adicionarDestinatario(apto.numero)
-                            }}
-                            className={`min-w-0 w-full relative h-[56px] p-1 rounded-md border-2 transition-all text-center active:scale-[0.99] ${
-                              aptoAtivo
-                                ? 'bg-sky-50 border-sky-600 text-sky-900 ring-2 ring-sky-300 shadow-sm'
-                                : jaAdicionado
-                                  ? 'bg-sky-50 border-sky-300 text-sky-800 shadow-sm'
-                                  : 'bg-white border-slate-200 hover:border-sky-200 hover:bg-slate-50 hover:shadow-sm'
-                            }`}
-                          >
-                            {jaAdicionado && (
-                              <span className="pointer-events-none absolute right-1 top-1 inline-flex items-center justify-center rounded-full bg-white/85 border border-emerald-200 w-4 h-4">
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              </span>
-                            )}
-                            <div
-                              className={`h-full flex flex-col items-center leading-none ${
-                                jaAdicionado ? 'pt-1 pb-7 justify-start' : 'justify-center'
-                              }`}
-                            >
-                              <span className={`text-[8px] font-semibold ${jaAdicionado ? 'text-sky-600' : 'text-slate-400'}`}>
-                                Apt
-                              </span>
-                              <span className={`mt-1 text-[15px] font-extrabold tracking-tight ${jaAdicionado ? 'text-sky-800' : 'text-slate-800'}`}>
-                                {apto.numero}
-                              </span>
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2 content-start">
+                  {apartamentosFiltrados.map((apto) => {
+                    const jaAdicionado = destinatarios.some(
+                      d => d.bloco === blocoSelecionado && d.apartamento === apto.numero
+                    )
+                    const aptoAtivo = destinoAtivo?.bloco === blocoSelecionado && destinoAtivo?.apartamento === apto.numero
+
+                    const blocoCands = normalizeBlocoCandidates(blocoSelecionado)
+                    const aptoCands = normalizeAptoCandidates(apto.numero)
+                    const temMorador = blocoCands.some(b => aptoCands.some(a => moradoresIndex.has(`${b}::${a}`)))
+
+                    const classesBase = temMorador
+                      ? ''
+                      : 'opacity-60 cursor-not-allowed'
+
+                    const tone = !temMorador
+                      ? 'bg-slate-50 border-slate-200'
+                      : aptoAtivo
+                        ? 'bg-gradient-to-br from-sky-50 to-blue-50 border-sky-600 ring-2 ring-sky-300'
+                        : jaAdicionado
+                          ? 'bg-gradient-to-br from-sky-50 to-blue-50 border-sky-200 hover:border-sky-300 hover:from-sky-100 hover:to-blue-100'
+                          : 'bg-gradient-to-br from-sky-50 to-blue-50 border-transparent hover:border-sky-300 hover:from-sky-100 hover:to-blue-100'
+
+                    return (
+                      <button
+                        key={apto.uid}
+                        onClick={() => {
+                          if (!temMorador) return
+                          const existe = destinatarios.some(d => d.bloco === blocoSelecionado && d.apartamento === apto.numero)
+                          if (!existe) {
+                            setDestinoAtivo({ bloco: blocoSelecionado, apartamento: apto.numero })
+                          } else if (aptoAtivo) {
+                            setDestinoAtivo({ bloco: blocoSelecionado, apartamento: '' })
+                          }
+                          adicionarDestinatario(apto.numero)
+                        }}
+                        disabled={!temMorador}
+                        aria-disabled={!temMorador}
+                        className={`relative p-3 rounded-lg border-2 transition-all text-center h-fit ${tone} ${classesBase}`}
+                      >
+                        {jaAdicionado && (
+                          <span className="pointer-events-none absolute right-1 top-1 inline-flex items-center justify-center rounded-full bg-white/80 border border-emerald-200 w-5 h-5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          </span>
+                        )}
+                        {!temMorador && (
+                          <span className="pointer-events-none absolute left-1 top-1 inline-flex items-center justify-center rounded-full bg-white/80 border border-slate-200 w-5 h-5">
+                            <Lock className="w-3 h-3 text-slate-500" />
+                          </span>
+                        )}
+                        <span className={`text-lg font-bold ${temMorador ? 'text-sky-700' : 'text-slate-500'}`}>
+                          {apto.numero}
+                        </span>
+                        <div className="mt-0.5 text-[10px] font-semibold text-slate-400">Apartamento</div>
+                      </button>
+                    )
+                  })}
+                </div>
 
                 {apartamentosFiltrados.length === 0 && (
                   <p className="text-center text-gray-500 py-8">Nenhum apartamento cadastrado</p>
@@ -2433,7 +2686,9 @@ useEffect(() => {
                     <div className="w-9 h-9 rounded-xl bg-green-50 border border-green-100 flex items-center justify-center">
                       <DoorOpen className="w-5 h-5 text-green-600" />
                     </div>
-                    <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900">Qual porta do gaveteiro?</h2>
+                    <h2 className="relative text-xl sm:text-2xl font-black tracking-tight text-slate-900 after:content-[''] after:absolute after:-bottom-1 after:left-0 after:h-1 after:w-12 after:rounded-full after:bg-sky-500">
+                      Qual porta do gaveteiro?
+                    </h2>
                   </div>
                 </div>
                 <button
@@ -2455,7 +2710,7 @@ useEffect(() => {
                   return (
                     <button
                       key={porta.uid}
-                      onClick={() => selecionarPorta(porta)}
+                      onClick={() => abrirConfirmacaoPorta(porta)}
                       aria-pressed={selected}
                       className={`group relative rounded-xl border text-center transition-all focus:outline-none focus:ring-2 focus:ring-sky-400 active:scale-[0.98] active:shadow-none ${
                         selected
@@ -2544,12 +2799,14 @@ useEffect(() => {
                     Cancelar
                   </button>
                   <button
-                    onClick={confirmarOcupacao}
+                    onClick={() => {
+                      void confirmarOcupacao().catch(() => {})
+                    }}
                     disabled={!portaSelecionada}
                     className={`px-4 py-2.5 font-bold rounded-xl transition-all flex items-center justify-center gap-2 min-w-[200px] ${
                       !portaSelecionada
-                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                        : 'bg-green-500 hover:bg-green-600 text-white shadow-lg'
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-green-500 text-white hover:bg-green-600'
                     }`}
                   >
                     <CheckCircle2 className="w-5 h-5" />
@@ -2564,7 +2821,7 @@ useEffect(() => {
         {/* ETAPA: Sucesso */}
         {etapa === 'sucesso' && (
           <div className="p-4 flex flex-col items-center justify-center flex-1 min-h-0">
-            <div className="w-full max-w-6xl">
+            <div className={`w-full transition-all ${portaSensorFechada ? 'max-w-lg' : 'max-w-5xl'}`}>
               <div className={`rounded-[32px] border shadow-xl overflow-hidden bg-gradient-to-br ${
                 portaSensorFechada
                   ? 'from-emerald-50 via-white to-white border-emerald-100'
@@ -2572,10 +2829,100 @@ useEffect(() => {
                     ? 'from-amber-50 via-white to-white border-amber-100'
                     : 'from-sky-50 via-white to-white border-sky-100'
               }`}>
-                <div className="grid grid-cols-12 min-h-[420px]">
-                  <div className="col-span-12 lg:col-span-7 p-7 flex flex-col">
-                    {!portaSensorFechada ? (
-                      <>
+                {portaSensorFechada ? (
+                <div className="px-8 py-8 flex flex-col items-center">
+                  {/* Header */}
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
+                      <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold tracking-[0.2em] text-emerald-600 uppercase">Sucesso</div>
+                      <div className="text-xl font-extrabold tracking-tight text-slate-900">Entrega confirmada</div>
+                    </div>
+                  </div>
+
+                  {/* Comprovante + WhatsApp */}
+                  <div className="w-full mt-6 space-y-4">
+                    {/* QR row */}
+                    <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                      <div className="shrink-0 rounded-xl bg-white p-1.5 border border-slate-100">
+                        <QRCode value={comprovanteUrl} size={72} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-slate-800">Comprovante</div>
+                        <button
+                          type="button"
+                          onClick={copiarComprovanteTotem}
+                          className={`mt-1.5 inline-flex items-center gap-1.5 text-xs font-bold transition-colors ${
+                            copiadoComprovante ? 'text-emerald-600' : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          {copiadoComprovante ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          {copiadoComprovante ? 'Copiado!' : 'Copiar link'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* WhatsApp — destaque */}
+                    <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/50 p-4 shadow-sm">
+                      <div className="flex items-center gap-2.5 mb-3">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
+                          <Phone className="w-3.5 h-3.5 text-white" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-extrabold text-emerald-900">Notificar entregador</div>
+                          <div className="text-[11px] text-emerald-700/70">Informe o WhatsApp para enviar o comprovante</div>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          value={whatsappEntregador}
+                          onChange={e => handleWhatsappChange(e.target.value)}
+                          inputMode="tel"
+                          placeholder="(00) 00000-0000"
+                          disabled={whatsappEntregadorEnviado}
+                          className={`h-12 w-full rounded-xl border px-4 text-base font-bold placeholder:text-slate-300 focus:outline-none focus:ring-2 transition-all ${
+                            whatsappEntregadorErro
+                              ? 'border-rose-300 bg-rose-50/60 focus:ring-rose-200 text-rose-900'
+                              : whatsappEntregadorEnviado
+                                ? 'border-emerald-300 bg-white text-emerald-800'
+                                : 'border-emerald-200 bg-white focus:ring-emerald-300'
+                          }`}
+                        />
+                        {enviandoWhatsappEntregador ? (
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                          </div>
+                        ) : whatsappEntregadorEnviado ? (
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                          </div>
+                        ) : null}
+                      </div>
+                      {whatsappEntregadorErro ? (
+                        <div className="mt-2 text-xs font-semibold text-rose-600">{whatsappEntregadorErro}</div>
+                      ) : whatsappEntregadorEnviado ? (
+                        <div className="mt-2 text-xs font-semibold text-emerald-700">Notificação enviada com sucesso.</div>
+                      ) : (
+                        <div className="mt-2 text-[11px] text-emerald-600/60">Envio automático ao completar o número.</div>
+                      )}
+                    </div>
+
+                    {/* Finalizar */}
+                    <button
+                      type="button"
+                      onClick={reiniciar}
+                      className="w-full h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700 text-lg"
+                    >
+                      <Package className="w-5 h-5" />
+                      Finalizar
+                    </button>
+                  </div>
+                </div>
+                ) : (
+                <div className="grid grid-cols-12 min-h-[380px]">
+                  <div className="col-span-12 lg:col-span-7 p-6 flex flex-col">
                         <div className="flex items-start justify-between gap-6">
                           <div className="min-w-0">
                             <div className="text-xs font-extrabold tracking-[0.18em] text-slate-400">OPERAÇÃO DO TOTEM</div>
@@ -2599,7 +2946,7 @@ useEffect(() => {
                           </div>
                         </div>
 
-                        <div className="mt-7 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
+                        <div className="mt-5 rounded-3xl border border-slate-200 bg-white/80 shadow-sm p-6">
                           <div className="text-2xl font-extrabold tracking-tight text-slate-900">
                             Deposite a mercadoria no gaveteiro
                           </div>
@@ -2614,162 +2961,63 @@ useEffect(() => {
                             </div>
                           ) : null}
                         </div>
-                      </>
-                    ) : (
-                      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm px-6 py-6">
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="flex items-center gap-4">
-                            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-600 text-white flex items-center justify-center shadow-lg">
-                              <span className="text-3xl font-extrabold leading-none">{portaSelecionadaAtualizada?.numero_porta}</span>
-                            </div>
-                            <div>
-                              <div className="text-xs font-extrabold tracking-[0.18em] text-emerald-700">PROCESSO CONCLUÍDO</div>
-                              <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Tudo finalizado com sucesso</div>
-                              <div className="text-sm font-semibold text-emerald-900/80">Guarde o comprovante (QRCode) para sua garantia.</div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
-                    {portaSensorFechada ? (
-                      <div className="mt-7 rounded-3xl border border-slate-200 bg-white/85 shadow-sm p-6">
-                        <div className="text-sm font-extrabold tracking-tight text-slate-900">Confirmação do processo</div>
-                        <div className="mt-1 text-xs font-semibold text-slate-600">Tudo foi registrado e está pronto para comprovação.</div>
-
-                        <div className="mt-4 grid gap-3">
-                          <div className="flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-                            <CheckCircle2 className="w-5 h-5 text-emerald-700 mt-0.5" />
-                            <div>
-                              <div className="text-sm font-extrabold text-emerald-950">Porta fechada confirmada</div>
-                              <div className="text-xs font-semibold text-emerald-900/80">Operação concluída com sucesso no totem.</div>
-                            </div>
-                          </div>
-
-                          <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                            <CheckCircle2 className="w-5 h-5 text-slate-600 mt-0.5" />
-                            <div>
-                              <div className="text-sm font-extrabold text-slate-900">Comprovante disponível</div>
-                              <div className="text-xs font-semibold text-slate-600">Escaneie o QRCode à direita para visualizar os detalhes.</div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3">
-                          <div className="text-xs font-extrabold tracking-wide text-sky-900">DICA</div>
-                          <div className="mt-1 text-xs font-semibold text-sky-900/80">Abra a câmera do celular e aponte para o QRCode. O comprovante abrirá automaticamente.</div>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="mt-auto pt-6">
-                      <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
-                        <div className="flex flex-col gap-3">
-                          {portaSensorFechada ? (
+                    <div className="mt-6">
+                        <div className="rounded-3xl border border-slate-200 bg-white/90 shadow-sm p-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-[1.4fr_1fr] gap-3">
                             <button
                               type="button"
-                              onClick={reiniciar}
-                              className="h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700"
+                              onClick={confirmarFechamentoManual}
+                              disabled={cancelandoOperacao || confirmandoFechamento}
+                              className="relative h-12 w-full rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold flex items-center justify-center shadow-lg hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-50 overflow-hidden"
                             >
-                              <Package className="w-5 h-5" />
-                              Encerrar e voltar ao início
-                            </button>
-                          ) : (
-                            <div className="h-14 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 font-extrabold flex items-center justify-center gap-2">
-                              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-                              <span>Aguardando fechar</span>
-                              <span className="inline-flex w-6 justify-start">
-                                <span className="animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
-                                <span className="animate-pulse" style={{ animationDelay: '200ms' }}>.</span>
-                                <span className="animate-pulse" style={{ animationDelay: '400ms' }}>.</span>
+                              {depositoDeadline && !confirmandoFechamento ? (
+                                <div
+                                  className="absolute bottom-0 left-0 h-1 bg-white/35"
+                                  style={{ width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%` }}
+                                />
+                              ) : null}
+                              <span className="w-full px-4 inline-flex items-center justify-between gap-3">
+                                <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                                  <CheckCircle2 className={`w-5 h-5 ${confirmandoFechamento ? 'animate-pulse' : ''}`} />
+                                  {confirmandoFechamento ? 'Confirmando...' : 'Confirmar entrega'}
+                                </span>
+                                {depositoDeadline && !confirmandoFechamento ? (
+                                  <span className="inline-flex items-center h-7 px-2.5 rounded-full bg-white/15 text-white text-sm font-extrabold tabular-nums whitespace-nowrap">
+                                    {formatarTempo(depositoRestanteMs)}
+                                  </span>
+                                ) : null}
                               </span>
-                            </div>
-                          )}
+                            </button>
 
-                          {!portaSensorFechada ? (
                             <button
                               type="button"
                               onClick={() => cancelarOperacaoTotem('Cancelamento pelo entregador (Totem)')}
-                              disabled={cancelandoOperacao}
-                              className="h-12 rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+                              disabled={cancelandoOperacao || confirmandoFechamento}
+                              className="h-12 w-full rounded-2xl border border-slate-200 bg-white text-slate-700 font-extrabold flex items-center justify-center gap-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
                             >
                               <RotateCcw className="w-5 h-5" />
-                              Cancelar
+                              <span className="whitespace-nowrap">Cancelar</span>
                             </button>
-                          ) : (
-                            <div className="h-12 flex items-center justify-center">
-                              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 text-emerald-900 border border-emerald-200 text-sm font-extrabold">
-                                <CheckCircle2 className="w-4 h-4" />
-                                Operação confirmada e finalizada
-                              </div>
-                            </div>
-                          )}
+                          </div>
                         </div>
-                      </div>
                     </div>
                   </div>
 
                   <div className="col-span-12 lg:col-span-5 bg-gradient-to-b from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-7 flex flex-col">
-                    {!portaSensorFechada ? (
                       <div className="flex-1 flex flex-col">
                         <div className="flex-1 rounded-3xl border border-slate-200 bg-white shadow-sm flex items-center justify-center p-6">
                           <img
                             src="/3_delivery%20(1).gif"
                             alt=""
-                            className="w-[360px] max-w-full h-auto max-h-[260px] object-contain"
+                            className="w-[360px] max-w-full h-auto max-h-[240px] object-contain"
                             aria-hidden="true"
                           />
                         </div>
-
-                        {!portaSensorFechada && depositoDeadline ? (
-                          <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-5">
-                            <div className="flex items-center justify-between">
-                              <div className="text-xs font-extrabold tracking-wide text-slate-500">TEMPO PARA FECHAR</div>
-                              <div className="text-sm font-extrabold tabular-nums text-slate-900">{formatarTempo(depositoRestanteMs)}</div>
-                            </div>
-                            <div className="mt-3 h-3 w-full rounded-full bg-slate-100 overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-amber-500 to-rose-500 transition-[width]"
-                                style={{
-                                  width: `${Math.min(100, Math.max(0, (depositoRestanteMs / 90000) * 100))}%`
-                                }}
-                              />
-                            </div>
-                            <div className="mt-2 text-[11px] font-semibold text-slate-500">
-                              Se não fechar em 1:30, a operação será cancelada automaticamente.
-                            </div>
-                          </div>
-                        ) : null}
                       </div>
-                    ) : (
-                      <div className="flex-1 flex flex-col">
-                        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 shadow-sm p-5">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-xs font-extrabold tracking-wide text-emerald-700">SUCESSO</div>
-                              <div className="mt-1 text-lg font-extrabold tracking-tight text-emerald-950">Entrega registrada com sucesso</div>
-                              <div className="mt-1 text-sm font-semibold text-emerald-900/90">Use o QRCode como comprovante do processo.</div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={copiarComprovanteTotem}
-                              className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-2xl border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100/40 text-xs font-extrabold"
-                            >
-                              <Copy className="w-4 h-4" />
-                              Copiar
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="mt-5 rounded-3xl border border-slate-200 bg-white shadow-sm p-6 flex items-center justify-center">
-                          <div className="rounded-3xl border border-slate-200 bg-white p-4">
-                            <QRCode value={comprovanteUrl} size={220} />
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
+                )}
               </div>
             </div>
           </div>

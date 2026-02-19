@@ -532,14 +532,14 @@ export default function DetalhesPorta() {
   }
 
   return (
-    <MainLayout>
-      <>
-        <Head>
-          <title>Porta {porta.numero_porta} - AIRE</title>
-          <meta name="description" content={`Configurações da Porta ${porta.numero_porta}`} />
-        </Head>
+    <>
+      <MainLayout>
+          <Head>
+            <title>Porta {porta.numero_porta} - AIRE</title>
+            <meta name="description" content={`Configurações da Porta ${porta.numero_porta}`} />
+          </Head>
 
-        {aviso ? (
+          {aviso ? (
           <div className="fixed top-4 right-4 z-[9999] w-[calc(100vw-2rem)] max-w-sm pointer-events-none">
             <div className="bg-emerald-600/95 backdrop-blur rounded-2xl shadow-2xl border border-emerald-500/40 p-4 pointer-events-auto">
               <div className="flex items-start justify-between gap-4">
@@ -565,78 +565,6 @@ export default function DetalhesPorta() {
 
               <div className="mt-3 h-1 w-full bg-white/20 rounded-full overflow-hidden">
                 <div className="h-full w-2/3 bg-white/70 rounded-full" />
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {confirmarCancelarAberto ? (
-          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/40"
-              onClick={() => setConfirmarCancelarAberto(false)}
-            />
-            <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-5">
-              <div className="text-base font-extrabold text-slate-900">Confirmar cancelamento</div>
-              <div className="mt-1 text-sm text-slate-600">
-                Deseja cancelar a ocupação desta porta?
-              </div>
-
-              <div className="mt-4 bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Porta</div>
-                    <div className="mt-1 text-sm font-extrabold text-slate-900">{porta.numero_porta}</div>
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Destino</div>
-                    {blocosEApartamentosAtuais.length ? (
-                      <div className="mt-1 space-y-1">
-                        {blocosEApartamentosAtuais.map((item) => (
-                          <div key={item.bloco} className="text-sm font-bold text-slate-900">
-                            {item.bloco}: {item.apartamentos.join(', ')}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-sm font-bold text-slate-900">N/A</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-slate-200">
-                  <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Data de Ocupação</div>
-                  {porta.ocupado_em ? (
-                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm font-extrabold text-slate-900">
-                      <span>{new Date(porta.ocupado_em).toLocaleDateString('pt-BR')}</span>
-                      <span className="text-slate-700">{new Date(porta.ocupado_em).toLocaleTimeString('pt-BR')}</span>
-                    </div>
-                  ) : (
-                    <div className="mt-1 text-sm font-extrabold text-slate-900">N/A</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirmarCancelarAberto(false)}
-                  className="h-10 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold"
-                >
-                  Voltar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmarCancelarAberto(false)
-                    executarAcaoPorta('cancelar')
-                  }}
-                  disabled={loadingAcao}
-                  className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold disabled:opacity-50"
-                >
-                  Confirmar
-                </button>
               </div>
             </div>
           </div>
@@ -784,16 +712,18 @@ export default function DetalhesPorta() {
                   onClick={() => toggleReservadaPortaria(!porta.reservada_portaria)}
                   disabled={salvandoConfigPortaria || porta.status_atual !== 'DISPONIVEL'}
                   className={
-                    `relative w-12 h-7 rounded-full border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ` +
-                    (porta.reservada_portaria ? 'bg-emerald-600 border-emerald-600' : 'bg-white border-slate-300')
+                    `relative w-14 h-8 rounded-full border-2 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-md ` +
+                    (porta.reservada_portaria 
+                      ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 border-emerald-600 shadow-emerald-500/30' 
+                      : 'bg-gradient-to-r from-slate-400 to-slate-500 border-slate-500 shadow-slate-400/30')
                   }
                   aria-label="Alternar modo portaria"
                   title="Alternar modo portaria"
                 >
                   <span
                     className={
-                      `absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white shadow-md transition-transform ` +
-                      (porta.reservada_portaria ? 'translate-x-5' : 'translate-x-0')
+                      `absolute top-1 left-1 w-6 h-6 rounded-full bg-white shadow-md transition-all duration-300 ` +
+                      (porta.reservada_portaria ? 'translate-x-6' : 'translate-x-0')
                     }
                   />
                   {salvandoConfigPortaria ? (
@@ -1037,7 +967,80 @@ export default function DetalhesPorta() {
               </div>
           </div>
         </div>
-      </>
     </MainLayout>
+
+    {/* Modal fora do MainLayout para ficar fixo na tela */}
+    {confirmarCancelarAberto ? (
+      <div className="fixed inset-0 z-[99998] flex items-center justify-center">
+        <div
+          className="absolute inset-0 bg-black/40"
+          onClick={() => setConfirmarCancelarAberto(false)}
+        />
+        <div className="relative w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl border border-slate-200 p-5">
+          <div className="text-base font-extrabold text-slate-900">Confirmar cancelamento</div>
+          <div className="mt-1 text-sm text-slate-600">
+            Deseja cancelar a ocupação desta porta?
+          </div>
+
+          <div className="mt-4 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Porta</div>
+                <div className="mt-1 text-sm font-extrabold text-slate-900">{porta.numero_porta}</div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Destino</div>
+                {blocosEApartamentosAtuais.length ? (
+                  <div className="mt-1 space-y-1">
+                    {blocosEApartamentosAtuais.map((item) => (
+                      <div key={item.bloco} className="text-sm font-bold text-slate-900">
+                        {item.bloco}: {item.apartamentos.join(', ')}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm font-bold text-slate-900">N/A</div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 pt-3 border-t border-slate-200">
+              <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Data de Ocupação</div>
+              {porta.ocupado_em ? (
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm font-extrabold text-slate-900">
+                  <span>{new Date(porta.ocupado_em).toLocaleDateString('pt-BR')}</span>
+                  <span className="text-slate-700">{new Date(porta.ocupado_em).toLocaleTimeString('pt-BR')}</span>
+                </div>
+              ) : (
+                <div className="mt-1 text-sm font-extrabold text-slate-900">N/A</div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmarCancelarAberto(false)}
+              className="h-10 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold"
+            >
+              Voltar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmarCancelarAberto(false)
+                executarAcaoPorta('cancelar')
+              }}
+              disabled={loadingAcao}
+              className="h-10 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold disabled:opacity-50"
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+  </>
   )
 }

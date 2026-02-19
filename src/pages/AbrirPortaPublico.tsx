@@ -198,9 +198,10 @@ export default function AbrirPortaPublico() {
     }, 900)
   }
 
-  const validarSenha = async () => {
+  const validarSenha = async (senhaOverride?: string) => {
     if (metodo !== 'senha') return
-    if (senha.length < 4) {
+    const senhaParaValidar = (senhaOverride ?? senha)
+    if (senhaParaValidar.length < 4) {
       setMensagem('Digite a senha completa')
       return
     }
@@ -222,7 +223,7 @@ export default function AbrirPortaPublico() {
           apartamento,
           status
         `)
-        .eq('senha', senha)
+        .eq('senha', senhaParaValidar)
         .eq('status', 'ATIVA')
         .limit(1)
         .maybeSingle()
@@ -232,7 +233,7 @@ export default function AbrirPortaPublico() {
         const { data: condominios } = await supabase
           .from('gvt_condominios')
           .select('uid, nome, senha_mestre')
-          .eq('senha_mestre', senha)
+          .eq('senha_mestre', senhaParaValidar)
           .limit(1)
 
         if (condominios && condominios.length > 0) {
@@ -263,7 +264,8 @@ export default function AbrirPortaPublico() {
             esp32_token,
             condominio_uid,
             gvt_condominios!inner (
-              nome
+              nome,
+              esp32_ip
             )
           )
         `)
@@ -277,12 +279,16 @@ export default function AbrirPortaPublico() {
       }
 
       const gaveteiro = portaData.gvt_gaveteiros as any
-      const condominio = gaveteiro?.gvt_condominios as any
-      const esp32Ip = gaveteiro?.esp32_ip
+      const condominioGaveteiro = gaveteiro?.gvt_condominios as any
+      const esp32Ip = String(
+        gaveteiro?.esp32_ip || condominioGaveteiro?.esp32_ip || condominio?.esp32_ip || ''
+      ).trim()
 
       if (!esp32Ip) {
         setStatus('erro')
-        setMensagem('Gaveteiro não configurado. Contate o administrador.')
+        setMensagem(
+          'Gaveteiro não configurado. Configure o IP do ESP32 (esp32_ip) no gaveteiro ou no condomínio e tente novamente.'
+        )
         return
       }
 
@@ -290,7 +296,7 @@ export default function AbrirPortaPublico() {
         porta_uid: portaData.uid,
         numero_porta: portaData.numero_porta,
         gaveteiro_nome: gaveteiro?.nome || 'Gaveteiro',
-        condominio_nome: condominio?.nome || 'Condomínio',
+        condominio_nome: condominioGaveteiro?.nome || condominio?.nome || 'Condomínio',
         bloco: senhaData.bloco,
         apartamento: senhaData.apartamento,
         esp32_ip: esp32Ip
@@ -300,17 +306,45 @@ export default function AbrirPortaPublico() {
       setStatus('abrindo')
       setMensagem('Abrindo porta...')
 
-      // Usar IP do ESP32 configurado no gaveteiro
-      const esp32BaseUrl = `http://${esp32Ip}`
-      const esp32Token = gaveteiro?.esp32_token || ESP32_TOKEN
-
       try {
-        await abrirPortaEsp32({
-          baseUrl: esp32BaseUrl,
-          token: esp32Token,
-          numeroPorta: portaData.numero_porta, // Envia o numero da porta fisica
-          timeoutMs: 10000
+        // Importante: evitar chamada direta ao ESP32 no browser (CORS / rede).
+        // Usamos um proxy same-origin (API route) para fazer o request server-side.
+        const condominioUid = String(gaveteiro?.condominio_uid || condominio?.uid || '').trim()
+        if (!condominioUid) {
+          throw new Error('Condomínio não identificado para abrir a porta')
+        }
+
+        const proxyRes = await fetch('/api/proxy/abrir-porta-individual', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            condominioUid,
+            portaUid: portaData.uid,
+            porta: portaData.numero_porta
+          })
         })
+
+        const proxyJson = await proxyRes.json().catch(() => null)
+        if (!proxyRes.ok || !proxyJson?.success) {
+          let msg =
+            proxyJson?.error ||
+            proxyJson?.message ||
+            'Não foi possível comunicar com o dispositivo para abrir a porta.'
+
+          if (proxyJson?.esp32Status || proxyJson?.esp32Response) {
+            const st = proxyJson?.esp32Status ? `status ${proxyJson.esp32Status}` : ''
+            const resp = proxyJson?.esp32Response ? String(proxyJson.esp32Response).slice(0, 160) : ''
+            const extra = [st, resp].filter(Boolean).join(' - ')
+            if (extra) msg = `${msg} (${extra})`
+          }
+
+          if (proxyJson?.esp32Url) {
+            msg = `${msg} [${proxyJson.esp32Url}]`
+          }
+          throw new Error(msg)
+        }
 
         // 4. Marcar senha como usada
         await supabase
@@ -368,7 +402,7 @@ export default function AbrirPortaPublico() {
       } catch (espError: any) {
         console.error('Erro ESP32:', espError)
         setStatus('erro')
-        setMensagem('Erro ao comunicar com a fechadura. Tente novamente.')
+        setMensagem(espError?.message || 'Erro ao comunicar com a fechadura. Tente novamente.')
       }
 
     } catch (error) {
@@ -390,6 +424,16 @@ export default function AbrirPortaPublico() {
     if (status === 'erro') {
       setStatus('idle')
       setMensagem('')
+    }
+
+    if (
+      isKiosk &&
+      metodo === 'senha' &&
+      !portaInfo &&
+      (status === 'idle' || status === 'erro') &&
+      next.length === 6
+    ) {
+      validarSenha(next)
     }
   }
 
@@ -434,66 +478,81 @@ export default function AbrirPortaPublico() {
 
   return (
     <div
-      className="min-h-screen bg-gradient-to-br from-blue-950 via-indigo-950 to-sky-900 flex items-center justify-center p-3"
+      className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-sky-900 flex items-center justify-center p-4 md:p-8"
     >
+      <div className="pointer-events-none fixed inset-0 opacity-40" aria-hidden="true">
+        <div className="absolute -top-40 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-sky-500/25 blur-3xl" />
+        <div className="absolute -bottom-48 left-1/4 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-indigo-500/25 blur-3xl" />
+      </div>
       <div
         className={`w-full ${
           showKioskKeypad
-            ? (metodo === 'senha' ? 'max-w-[720px]' : 'max-w-4xl')
+            ? (metodo === 'senha' ? 'max-w-[820px]' : 'max-w-5xl')
             : isKiosk && metodo === 'facial'
-              ? 'max-w-3xl'
-              : 'max-w-md'
+              ? 'max-w-4xl'
+              : (isKiosk ? 'max-w-[900px]' : 'max-w-2xl')
         }`}
       >
-        {/* Logo/Header */}
-        <div className="mb-6">
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-3">
-              <div className="inline-flex items-center justify-center w-12 h-12 bg-white/10 rounded-full">
-                <Package className="w-6 h-6 text-white" />
-              </div>
-              <h1 className="text-2xl font-bold text-white">Retirada de Encomenda</h1>
-            </div>
-            <p className="text-white/70 mt-2">Digite sua senha para abrir a porta</p>
-          </div>
-        </div>
-
         {/* Card Principal */}
-        <div className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl overflow-hidden">
-          {/* Status da Porta - Header com Bloco e Apartamento em destaque */}
-          {portaInfo && (
-            <div className="bg-gradient-to-r from-sky-600 to-blue-700 px-5 py-4 text-white">
-              {/* Bloco e Apartamento em destaque */}
-              <div className="flex items-center justify-center gap-3 mb-3">
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-5 py-2.5 text-center">
-                  <p className="text-xs uppercase tracking-wider opacity-80">Bloco</p>
-                  <p className="text-2xl font-bold">{portaInfo.bloco}</p>
+        <div className="bg-white/95 backdrop-blur-xl rounded-[28px] shadow-2xl shadow-black/30 overflow-hidden border border-white/30">
+          <div className="px-6 py-4 bg-gradient-to-r from-slate-900/70 via-slate-900/55 to-slate-900/40 text-white border-b border-white/10">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="inline-flex items-center justify-center h-10 w-10 rounded-xl bg-white/10 border border-white/10">
+                  <Package className="w-5 h-5 text-white" />
                 </div>
-                <div className="text-3xl font-light opacity-50">•</div>
-                <div className="bg-white/20 backdrop-blur-sm rounded-xl px-5 py-2.5 text-center">
-                  <p className="text-xs uppercase tracking-wider opacity-80">Apartamento</p>
-                  <p className="text-2xl font-bold">{portaInfo.apartamento}</p>
+                <div>
+                  <div className="text-sm md:text-base font-extrabold tracking-tight">
+                    Retirada de Encomenda
+                  </div>
+                  <div className="text-[11px] md:text-xs text-white/70 font-semibold">
+                    {status === 'aberta' || status === 'aguardando_fechar'
+                      ? 'Você já pode retirar sua encomenda'
+                      : 'Digite sua senha para abrir a porta'}
+                  </div>
                 </div>
               </div>
-              {/* Porta */}
-              <div className="flex items-center justify-center">
-                <div className="bg-white/10 rounded-full px-4 py-1 flex items-center gap-2">
-                  <DoorOpen className="w-4 h-4" />
-                  <span className="text-sm">Porta <strong>#{portaInfo.numero_porta}</strong></span>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {portaInfo && (
+                  <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 border border-white/10">
+                    <DoorOpen className="w-4 h-4" />
+                    <span className="text-sm font-extrabold">Porta #{portaInfo.numero_porta}</span>
+                  </div>
+                )}
+
+                <div
+                  className={`inline-flex items-center rounded-full px-3 py-2 text-xs font-extrabold tracking-widest border ${
+                    status === 'aberta' || status === 'aguardando_fechar'
+                      ? 'bg-emerald-500/15 text-emerald-100 border-emerald-400/25'
+                      : status === 'abrindo'
+                        ? 'bg-amber-500/15 text-amber-100 border-amber-400/25'
+                        : status === 'validando'
+                          ? 'bg-sky-500/15 text-sky-100 border-sky-400/25'
+                          : 'bg-white/10 text-white/80 border-white/10'
+                  }`}
+                >
+                  {status === 'aberta' || status === 'aguardando_fechar'
+                    ? 'ABERTA'
+                    : status === 'abrindo'
+                      ? 'ABRINDO'
+                      : status === 'validando'
+                        ? 'VALIDANDO'
+                        : 'PRONTO'}
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
           <div
             className={
               showKioskKeypad
-                ? 'grid items-stretch justify-center grid-cols-1 lg:grid-cols-[380px_320px] divide-y divide-slate-200 lg:divide-y-0 lg:divide-x'
+                ? 'grid items-stretch justify-center grid-cols-1 xl:grid-cols-[440px_360px] divide-y divide-slate-200/80 xl:divide-y-0 xl:divide-x'
                 : ''
             }
           >
             <div
-              className={`${isKiosk && metodo === 'facial' && !showKioskKeypad ? 'p-5' : 'p-6'} ${
+              className={`${isKiosk && metodo === 'facial' && !showKioskKeypad ? 'p-6' : 'p-7'} ${
                 showKioskKeypad && metodo === 'senha' ? 'flex flex-col' : ''
               }`}
             >
@@ -696,51 +755,73 @@ export default function AbrirPortaPublico() {
                       <div className="w-20 h-20 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
                     </div>
                   </div>
-                  <p className="text-lg text-gray-600 mt-4">{mensagem}</p>
+                  <p className="text-lg font-semibold text-slate-700 mt-4">
+                    Abrindo porta{portaInfo?.numero_porta ? ` #${portaInfo.numero_porta}` : ''}...
+                  </p>
+                  <p className="mt-2 text-sm text-slate-500">Aguarde um instante.</p>
                 </div>
               )}
 
               {/* Estado: Aberta */}
               {(status === 'aberta' || status === 'aguardando_fechar') && (
-                <div className="text-center py-6">
-                  {/* Ícone animado */}
-                  <div className="inline-flex items-center justify-center w-24 h-24 bg-green-100 rounded-full mb-4 animate-pulse">
-                    <DoorOpen className="w-12 h-12 text-green-600" />
-                  </div>
-                  
-                  <h3 className="text-3xl font-bold text-green-600 mb-2">Porta Aberta!</h3>
-                  <p className="text-gray-600 mb-2">Retire sua encomenda</p>
-                  
-                  {/* Lembrete do destino */}
-                  {portaInfo && (
-                    <div className="inline-flex items-center gap-2 bg-sky-50 text-sky-700 px-4 py-2 rounded-full text-sm font-medium mb-4">
-                      <span>Bloco {portaInfo.bloco}</span>
-                      <span>•</span>
-                      <span>Apto {portaInfo.apartamento}</span>
-                    </div>
-                  )}
-                  
-                  {tempoRestante > 0 && (
-                    <div className="mt-4 bg-gray-50 rounded-xl p-4">
-                      <div className="text-sm text-gray-500 mb-1">Tempo para retirada</div>
-                      <div className="text-5xl font-bold text-sky-700 mb-2">{tempoRestante}s</div>
-                      <div className="w-full bg-gray-200 rounded-full h-3">
-                        <div 
-                          className={`h-3 rounded-full transition-all duration-1000 ${
-                            tempoRestante <= 10 ? 'bg-red-500' : tempoRestante <= 20 ? 'bg-amber-500' : 'bg-sky-600'
-                          }`}
-                          style={{ width: `${(tempoRestante / 30) * 100}%` }}
-                        ></div>
+                <div className="py-6 md:py-8">
+                  <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-6 xl:gap-7 items-stretch">
+                    <div className="rounded-3xl border border-slate-200 bg-white shadow-sm p-6 xl:p-7 h-full">
+                      <div className="flex items-start gap-4">
+                        <div className="shrink-0 inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-emerald-500/10 border border-emerald-200">
+                          <DoorOpen className="h-8 w-8 text-emerald-600" />
+                        </div>
+
+                        <div className="min-w-0 text-left">
+                          <div className="inline-flex items-center rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100 px-3 py-1 text-xs font-extrabold tracking-widest">
+                            PORTA ABERTA
+                          </div>
+
+                          <h3 className="mt-3 text-4xl md:text-5xl font-extrabold tracking-tight text-slate-900 leading-tight">
+                            Você já pode retirar sua encomenda
+                          </h3>
+                          <p className="mt-2 text-base md:text-lg text-slate-600 max-w-[68ch]">
+                            Porta {portaInfo?.numero_porta ? `#${portaInfo.numero_porta}` : ''} aberta. Retire a encomenda e feche a porta.
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  )}
 
-                  <button
-                    onClick={resetar}
-                    className="mt-6 px-8 py-3 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-all"
-                  >
-                    Nova Retirada
-                  </button>
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 shadow-sm p-5 h-full flex flex-col">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-extrabold tracking-widest text-slate-400">TEMPO</div>
+                        <div className={`text-xs font-extrabold tabular-nums ${tempoRestante <= 10 ? 'text-red-600' : tempoRestante <= 20 ? 'text-amber-600' : 'text-slate-600'}`}>
+                          {tempoRestante}s
+                        </div>
+                      </div>
+
+                      <div className="mt-4">
+                        <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                          <div
+                            className={`h-2.5 rounded-full transition-all duration-1000 ${
+                              tempoRestante <= 10 ? 'bg-red-500' : tempoRestante <= 20 ? 'bg-amber-500' : 'bg-slate-400'
+                            }`}
+                            style={{ width: `${Math.max(0, Math.min(100, (tempoRestante / 30) * 100))}%` }}
+                          ></div>
+                        </div>
+
+                        <div className="mt-5 text-center">
+                          <div className="text-4xl md:text-5xl font-extrabold text-slate-900 tabular-nums leading-none">
+                            {tempoRestante}s
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex-1" />
+
+                      <button
+                        onClick={resetar}
+                        className="mt-5 w-full h-12 rounded-2xl border border-slate-300 bg-white text-slate-800 font-extrabold hover:bg-slate-50 transition-colors"
+                      >
+                        Nova Retirada
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

@@ -1,7 +1,21 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import Link from 'next/link'
-import { Activity, Building2, ChevronLeft, ChevronRight, LayoutGrid, LogOut, Menu, Package, User, Users, Wifi, X } from 'lucide-react'
+import {
+  Activity,
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  Droplets,
+  LayoutGrid,
+  LogOut,
+  Menu,
+  Package,
+  User,
+  Users,
+  Wifi,
+  X
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useAuth } from '../src/contexts/AuthContext'
 

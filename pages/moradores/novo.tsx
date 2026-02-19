@@ -123,7 +123,7 @@ export default function NovoMoradorPage() {
 
   const abrirFacial = async (target: { kind: 'morador' } | { kind: 'contato'; idx: number }) => {
     // Preferir webcam quando disponível; caso falhe, abrir seletor de arquivos (que no mobile pode abrir a câmera).
-    if (typeof navigator !== 'undefined' && navigator?.mediaDevices?.getUserMedia) {
+    if (typeof navigator !== 'undefined' && typeof navigator?.mediaDevices?.getUserMedia === 'function') {
       try {
         await abrirCamera(target)
         return

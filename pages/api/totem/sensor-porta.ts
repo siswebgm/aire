@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next'
-import { supabase } from '../../../src/lib/supabaseClient'
+import { supabaseServer } from '../../../lib/server/supabase'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'condominioUid e numeroPorta são obrigatórios' })
     }
 
-    const { data: condominio, error: condominioError } = await supabase
+    const { data: condominio, error: condominioError } = await supabaseServer
       .from('gvt_condominios')
       .select('esp32_ip, uid')
       .eq('uid', condominioUid)
@@ -51,6 +51,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       payload = await response.json()
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        return res.status(504).json({
+          error: 'Tempo esgotado ao consultar ESP32',
+          sensorUrl
+        })
+      }
+      return res.status(502).json({
+        error: 'Falha ao consultar ESP32',
+        message: e?.message || String(e),
+        sensorUrl
+      })
     } finally {
       clearTimeout(timeoutId)
     }
@@ -58,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sensor = String(payload?.sensor || '').toLowerCase()
     const sensorNormalizado = sensor === 'aberto' || sensor === 'fechado' ? sensor : 'desconhecido'
 
-    const { data: porta, error: portaError } = await supabase
+    const { data: porta, error: portaError } = await supabaseServer
       .from('gvt_portas')
       .select('uid')
       .eq('condominio_uid', condominioUid)
@@ -69,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Porta não encontrada' })
     }
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseServer
       .from('gvt_portas')
       .update({
         sensor_ima_status: sensorNormalizado,
@@ -78,7 +90,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('uid', porta.uid)
 
     if (updateError) {
-      return res.status(500).json({ error: 'Erro ao atualizar sensor no banco' })
+      return res.status(500).json({
+        error: 'Erro ao atualizar sensor no banco',
+        message: updateError.message
+      })
     }
 
     return res.status(200).json({
