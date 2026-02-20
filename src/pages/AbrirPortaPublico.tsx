@@ -682,7 +682,7 @@ export default function AbrirPortaPublico() {
                           <button
                             type="button"
                             onClick={() => {
-                              window.location.href = '/totem-kiosk'
+                              window.location.href = '/pdv'
                             }}
                             disabled={kioskSenhaProcessando}
                             className={`h-11 px-7 rounded-xl text-slate-600 hover:text-sky-700 hover:bg-white/80 text-sm font-extrabold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${kioskSenhaProcessando ? 'pointer-events-none' : ''}`}
@@ -718,7 +718,7 @@ export default function AbrirPortaPublico() {
                           <button
                             type="button"
                             onClick={() => {
-                              window.location.href = '/totem-kiosk'
+                              window.location.href = '/pdv'
                             }}
                             className="h-10 px-6 rounded-xl text-slate-600 hover:text-sky-700 hover:bg-white/80 text-sm font-extrabold transition-colors"
                           >

@@ -55,6 +55,8 @@ export interface Porta {
   cliente_uid?: string
   ativo: boolean
   reservada_portaria?: boolean
+  // Tamanho do armário
+  tamanho?: 'P' | 'M' | 'G' | 'GG'
   // Campos para identificar o ocupante atual
   bloco_atual?: string
   apartamento_atual?: string

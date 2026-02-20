@@ -63,9 +63,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <CondominioInativo onLogout={logout} />
   }
 
-  // Perfil KIOSK só pode acessar a rota /totem-kiosk
-  if (usuario?.perfil === 'KIOSK' && location.pathname !== '/totem-kiosk' && location.pathname !== '/retirada') {
-    return <Navigate to="/totem-kiosk" replace />
+  // Perfil KIOSK só pode acessar a rota /pdv
+  if (usuario?.perfil === 'KIOSK' && location.pathname !== '/pdv' && location.pathname !== '/retirada') {
+    return <Navigate to="/pdv" replace />
   }
 
   return <>{children}</>
@@ -415,7 +415,7 @@ function AppRoutes() {
       />
       {/* Página kiosk/fullscreen do Totem (sem menu) */}
       <Route
-        path="/totem-kiosk"
+        path="/pdv"
         element={
           <ProtectedRoute>
             <GaveteirosTotem mode="kiosk" />

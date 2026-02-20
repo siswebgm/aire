@@ -34,7 +34,7 @@ export default function Login() {
     if (result.success) {
       const savedUser = localStorage.getItem('gvt_usuario')
       const perfil = savedUser ? JSON.parse(savedUser)?.perfil : undefined
-      router.push(perfil === 'KIOSK' ? '/totem-kiosk' : '/')
+      router.push(perfil === 'KIOSK' ? '/pdv' : '/')
     } else {
       setError(result.error || 'Erro ao fazer login')
     }

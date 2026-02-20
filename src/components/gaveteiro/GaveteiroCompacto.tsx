@@ -515,16 +515,22 @@ function PortaMini({
         `}
         title={tooltip}
       >
+        {/* Indicador de tamanho no canto superior direito */}
+        {porta.tamanho && (
+          <div className="absolute top-0.5 right-0.5 z-10">
+            <div className={`${colors.bg} text-white text-[8px] font-bold px-1.5 py-0.5 rounded shadow-lg opacity-90`}>
+              {porta.tamanho}
+            </div>
+          </div>
+        )}
+        
         {/* Ícone pequeno para ocupados */}
         {porta.status_atual === 'OCUPADO' && (
           <Package size={12} className="absolute top-1 left-1 opacity-60" />
         )}
         
         <div className="flex flex-col items-center">
-          <span className="text-lg font-bold">{porta.numero_porta}</span>
-          {porta.status_atual === 'DISPONIVEL' && (
-            <span className="text-xs text-yellow-300 mt-1 font-bold">+24h</span>
-          )}
+          <span className="text-xl font-bold text-white drop-shadow-lg">{porta.numero_porta}</span>
         </div>
         
         {/* Indicador de compartilhada */}
@@ -593,6 +599,14 @@ function PortaMini({
                 <div className="flex-1 overflow-y-auto">
                   {/* Dados */}
                   <div className="p-5 space-y-4">
+                  
+                  {/* Tamanho da porta */}
+                  {porta.tamanho && (
+                    <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100">
+                      <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Tamanho</p>
+                      <p className="mt-1 text-sm font-extrabold text-blue-700">{porta.tamanho}</p>
+                    </div>
+                  )}
                   
                   {/* Destinatários agrupados por bloco */}
                   {porta.status_atual === 'OCUPADO' && destinatariosAgrupados.length > 0 && (

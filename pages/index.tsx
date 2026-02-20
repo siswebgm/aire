@@ -14,7 +14,7 @@ export default function Home() {
     }
     // Redirecionar usuário KIOSK para a página do totem
     if (!loading && usuario?.perfil === 'KIOSK') {
-      router.push('/totem-kiosk')
+      router.push('/pdv')
     }
   }, [usuario, loading, router])
 

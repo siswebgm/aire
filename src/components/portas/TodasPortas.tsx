@@ -104,6 +104,7 @@ export default function TodasPortas() {
   const [destinatarios, setDestinatarios] = useState<Destinatario[]>([{ bloco: '', apartamento: '' }])
   const [showOcuparForm, setShowOcuparForm] = useState(false)
   const [filtro, setFiltro] = useState<'todas' | 'disponiveis' | 'ocupadas'>('todas')
+  const [filtroTamanho, setFiltroTamanho] = useState<string>('todos')
   const [isFullScreen, setIsFullScreen] = useState(false)
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<Date>(new Date())
   const [consultaBloco, setConsultaBloco] = useState('')
@@ -528,9 +529,16 @@ export default function TodasPortas() {
   }
 
   const portasFiltradas = portas.filter(porta => {
-    if (filtro === 'todas') return true
-    if (filtro === 'disponiveis') return porta.status_atual === 'DISPONIVEL' && !(porta as any).reservada_portaria
-    if (filtro === 'ocupadas') return porta.status_atual === 'OCUPADO'
+    // Filtro por status
+    if (filtro === 'disponiveis' && porta.status_atual !== 'DISPONIVEL') return false
+    if (filtro === 'ocupadas' && porta.status_atual !== 'OCUPADO') return false
+    
+    // Filtro por tamanho
+    if (filtroTamanho !== 'todos' && porta.tamanho !== filtroTamanho) return false
+    
+    // Excluir portas reservadas da portaria no filtro de disponíveis
+    if (filtro === 'disponiveis' && (porta as any).reservada_portaria) return false
+    
     return true
   })
 
@@ -705,6 +713,18 @@ export default function TodasPortas() {
             >
               Ocupadas
             </button>
+
+            <select
+              value={filtroTamanho}
+              onChange={(e) => setFiltroTamanho(e.target.value)}
+              className="px-4 py-2 rounded-xl font-semibold bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 transition-all"
+            >
+              <option value="todos">Todos tamanhos</option>
+              <option value="P">Tamanho P</option>
+              <option value="M">Tamanho M</option>
+              <option value="G">Tamanho G</option>
+              <option value="GG">Tamanho GG</option>
+            </select>
 
             <button
               onClick={toggleFullScreen}
@@ -1108,6 +1128,15 @@ export default function TodasPortas() {
               className={`relative group aspect-square rounded-sm text-xs font-bold transition-all duration-200 cursor-pointer ${getCorPorta(porta)}`}
               onClick={() => abrirDetalhesPorta(porta)}
             >
+              {/* Indicador de tamanho no canto superior direito */}
+              {porta.tamanho && (
+                <div className="absolute top-0.5 right-0.5 z-10">
+                  <div className={`${getCorPorta(porta)} text-white text-[8px] font-bold px-1.5 py-0.5 rounded shadow-lg opacity-90`}>
+                    {porta.tamanho}
+                  </div>
+                </div>
+              )}
+              
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 {porta.status_atual === 'OCUPADO' && porta.ocupado_em && (
                   (() => {
@@ -1118,16 +1147,20 @@ export default function TodasPortas() {
                       // 🎨 NÚMERO GRANDE, TEMPO PEQUENO (SEM REPETIÇÃO)
                       return (
                         <div className="flex flex-col items-center justify-center">
-                          <span className="text-sm font-bold">{porta.numero_porta}</span>
+                          <span className="text-lg font-bold text-white drop-shadow-lg">{porta.numero_porta}</span>
                           <span className="text-[6px] text-white font-medium leading-tight opacity-80">
                             {formatarTempo(minutosOcupada)}
                           </span>
                         </div>
                       )
                     }
-                    return <span className="text-sm font-bold">{porta.numero_porta}</span>
+                    return <span className="text-lg font-bold text-white drop-shadow-lg">{porta.numero_porta}</span>
                   })()
-                ) || <span className="text-sm font-bold">{porta.numero_porta}</span>}
+                ) || (
+                  <div className="flex flex-col items-center justify-center">
+                    <span className="text-lg font-bold text-white drop-shadow-lg">{porta.numero_porta}</span>
+                  </div>
+                )}
               </div>
               
               {/* 🎨 SEM INDICADORES VISUAIS - APENAS CORES E TEMPO */}

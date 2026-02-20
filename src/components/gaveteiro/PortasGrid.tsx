@@ -136,11 +136,20 @@ function PortaCard({
       relative p-3 sm:p-4 rounded-xl border-2 ${config.borderColor} ${config.bgColor}
       transition-all hover:shadow-lg
     `}>
+      {/* Indicador de tamanho no canto superior direito */}
+      {porta.tamanho && (
+        <div className="absolute top-1.5 right-1.5 z-10">
+          <div className={`${config.bgColor} text-white text-[8px] font-bold px-1.5 py-0.5 rounded shadow-lg opacity-90`}>
+            {porta.tamanho}
+          </div>
+        </div>
+      )}
+      
       {/* Número da porta */}
       <div className="flex items-center justify-between mb-2 sm:mb-3">
         <div className={`
           w-10 h-10 sm:w-12 sm:h-12 rounded-full ${config.iconBg} text-white
-          flex items-center justify-center text-lg sm:text-xl font-bold
+          flex items-center justify-center text-lg sm:text-xl font-bold drop-shadow-lg
         `}>
           {porta.numero_porta}
         </div>

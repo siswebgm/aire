@@ -51,7 +51,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
     adminOnly?: boolean
   }> = [
     { href: '/', label: 'Dashboard', icon: LayoutGrid },
-    { href: '/totem-kiosk', label: 'Totem', icon: Package },
+    { href: '/pdv', label: 'Totem', icon: Package },
     { href: '/moradores', label: 'Moradores', icon: Users },
     { href: '/blocos', label: 'Blocos', icon: Building2 },
     { href: '/movimentos', label: 'Movimentos', icon: Activity },

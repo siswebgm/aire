@@ -17,7 +17,18 @@ export default {
         '20': 'repeat(20, minmax(0, 1fr))',
         '24': 'repeat(24, minmax(0, 1fr))',
         '32': 'repeat(32, minmax(0, 1fr))',
-      }
+      },
+      animation: {
+        'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
+      },
+      keyframes: {
+        'ping': {
+          '75%, 100%': {
+            transform: 'scale(2)',
+            opacity: '0',
+          },
+        },
+      },
     },
   },
   plugins: [],

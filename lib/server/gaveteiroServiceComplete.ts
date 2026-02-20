@@ -364,6 +364,16 @@ async function criarSenhaProvisoriaComUid(
 ): Promise<{ uid: string; senha: string }> {
   const senha = await gerarSenhaUnica(condominioUid)
 
+  // Gerar payload do QR Code (JSON com dados para retirada)
+  const qrcodeData = JSON.stringify({
+    c: condominioUid,
+    p: portaUid,
+    s: senha,
+    b: bloco,
+    a: apartamento
+  })
+
+  // 1. Inserir senha e obter UID
   const { data, error } = await supabaseServer
     .from(TABLES.senhas_provisorias)
     .insert({
@@ -373,13 +383,25 @@ async function criarSenhaProvisoriaComUid(
       apartamento,
       senha,
       status: 'ATIVA',
-      movimentacao_uid: movimentacaoUid || null
+      movimentacao_uid: movimentacaoUid || null,
+      qrcode_data: qrcodeData
     })
     .select('uid, senha')
     .single()
 
   if (error) throw error
-  return { uid: (data as any).uid, senha: (data as any).senha }
+
+  const senhaUid = (data as any).uid
+
+  // 2. Gerar URL do QR Code via qrserver.com (dados: senha_condominioUid)
+  const qrcodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=20&data=${encodeURIComponent(`${senha}_${condominioUid}`)}`
+
+  await supabaseServer
+    .from(TABLES.senhas_provisorias)
+    .update({ qrcode_url: qrcodeUrl })
+    .eq('uid', senhaUid)
+
+  return { uid: senhaUid, senha: (data as any).senha }
 }
 
 export async function cancelarSenhasPorta(portaUid: string): Promise<void> {

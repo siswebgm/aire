@@ -436,7 +436,7 @@ export async function criarSenhasProvisórias(
     })
   }
 
-  // Inserir todas as senhas no banco
+  // Inserir todas as senhas no banco (com qrcode_data)
   const { data, error } = await supabase
     .from(TABLES.senhas_provisorias)
     .insert(
@@ -446,7 +446,14 @@ export async function criarSenhasProvisórias(
         bloco: s.bloco,
         apartamento: s.apartamento,
         senha: s.senha,
-        status: 'ATIVA'
+        status: 'ATIVA',
+        qrcode_data: JSON.stringify({
+          c: condominioUid,
+          p: portaUid,
+          s: s.senha,
+          b: s.bloco,
+          a: s.apartamento
+        })
       }))
     )
     .select('uid, bloco, apartamento, senha')
@@ -454,6 +461,17 @@ export async function criarSenhasProvisórias(
   if (error) {
     console.error('Erro ao criar senhas provisórias:', error)
     throw error
+  }
+
+  // Gerar e salvar qrcode_url para cada senha inserida (via qrserver.com)
+  if (data) {
+    for (const row of data as any[]) {
+      const qrcodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=20&data=${encodeURIComponent(`${row.senha}_${condominioUid}`)}`
+      await supabase
+        .from(TABLES.senhas_provisorias)
+        .update({ qrcode_url: qrcodeUrl })
+        .eq('uid', row.uid)
+    }
   }
 
   // Retornar com UID gerado pelo banco (ordem costuma ser preservada pelo Supabase)

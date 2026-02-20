@@ -11,6 +11,7 @@ export interface Porta {
   ultimo_evento_em: string
   cliente_uid?: string
   ativo: boolean
+  tamanho?: 'P' | 'M' | 'G' | 'GG'
   bloco_atual?: string
   apartamento_atual?: string
   compartilhada?: boolean
