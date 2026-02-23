@@ -4,6 +4,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  X,
   ArrowLeft,
   ArrowRight,
   Inbox,
@@ -79,6 +80,7 @@ export default function PdvPage() {
     apartamento?: string | null
     senha_uid?: string | null
   } | null>(null)
+  const [retiradaUiStyle] = useState<'clean' | 'dynamic'>('dynamic')
   const [modalScannerAberto, setModalScannerAberto] = useState(false)
   const [camerasDisponiveis, setCamerasDisponiveis] = useState<Array<{ deviceId: string; label: string }>>([])
   const [cameraSelecionadaId, setCameraSelecionadaId] = useState<string>('')
@@ -292,6 +294,82 @@ export default function PdvPage() {
     setMensagemErro('')
 
     try {
+      // 1) Pré-teste de comunicação com o ESP32 (sem abrir porta).
+      try {
+        const espTestResponse = await fetch('/api/proxy/abrir-porta-individual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio?.uid,
+            portaUid: portaSelecionada.uid,
+            porta: portaSelecionada.numero_porta,
+            testOnly: true
+          })
+        })
+
+        const espTestData = await espTestResponse.json().catch(() => null)
+        if (!espTestResponse.ok || !espTestData?.success) {
+          const rawMsg = String(espTestData?.message || espTestData?.esp32Response || '')
+          const isFetchFailed = rawMsg.toLowerCase().includes('fetch failed')
+          const isTimeout = rawMsg.toLowerCase().includes('timeout')
+
+          const msg = isFetchFailed
+            ? 'Não foi possível comunicar com o dispositivo (ESP32). Verifique se o gaveteiro está ligado e conectado na rede.'
+            : isTimeout
+              ? 'O dispositivo (ESP32) não respondeu a tempo. Verifique a conexão e tente novamente.'
+              : 'Não foi possível comunicar com o dispositivo (ESP32). Tente novamente.'
+
+          setMensagemErro(msg)
+          setEtapa('erro')
+          return
+        }
+      } catch (err) {
+        console.error('[PDV] Pré-teste ESP32 falhou:', err)
+        setMensagemErro(err instanceof Error ? err.message : 'Falha ao comunicar com o dispositivo (ESP32).')
+        setEtapa('erro')
+        return
+      }
+
+      // 2) Abrir porta física. Se falhar, aborta sem ocupar/gerar senha.
+      try {
+        console.log('[PDV] Abrindo porta física ao confirmar entrega:', portaSelecionada.numero_porta)
+
+        const response = await fetch('/api/proxy/abrir-porta-individual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            condominioUid: condominio?.uid,
+            portaUid: portaSelecionada.uid,
+            porta: portaSelecionada.numero_porta
+          })
+        })
+
+        const data = await response.json().catch(() => null)
+        if (!response.ok || !data?.success) {
+          const rawMsg = String(data?.esp32Response || data?.message || '')
+          const isFetchFailed = rawMsg.toLowerCase().includes('fetch failed')
+          const isTimeout = rawMsg.toLowerCase().includes('timeout')
+
+          const msg = isFetchFailed
+            ? 'Não foi possível comunicar com o dispositivo (ESP32). Verifique se o gaveteiro está ligado e conectado na rede.'
+            : isTimeout
+              ? 'O dispositivo (ESP32) não respondeu a tempo. Verifique a conexão e tente novamente.'
+              : (data?.message || 'Não foi possível abrir a porta. Tente novamente.')
+
+          setMensagemErro(msg)
+          setEtapa('erro')
+          return
+        }
+
+        console.log('[PDV] Porta aberta com sucesso:', data.message)
+      } catch (err) {
+        console.error('[PDV] Erro ao abrir porta:', err)
+        setMensagemErro(err instanceof Error ? err.message : 'Falha ao comunicar com o dispositivo (ESP32).')
+        setEtapa('erro')
+        return
+      }
+
+      // 3) Com a porta aberta, confirmar ocupação e gerar senhas.
       const destinatarios: Destinatario[] = [{
         bloco: blocoNormalizado || blocoDigitado,
         apartamento: aptoDigitado,
@@ -308,16 +386,6 @@ export default function PdvPage() {
 
       if (resultado.senhas) {
         setSenhasGeradas(resultado.senhas)
-      }
-
-      // Abrir porta
-      const gaveteiro = gaveteiros.find(g => g.uid === portaSelecionada.gaveteiro_uid)
-      if (gaveteiro?.esp32_ip) {
-        try {
-          await abrirPortaEsp32({ baseUrl: '/esp32', token: gaveteiro.esp32_token || 'teste', numeroPorta: portaSelecionada.numero_porta })
-        } catch (err) {
-          console.warn('[PDV] Erro ao abrir porta ESP32:', err)
-        }
       }
 
       setEtapa('sucesso')
@@ -476,7 +544,8 @@ export default function PdvPage() {
   }
 
   const validarERetirar = useCallback(async (senhaRaw?: string) => {
-    const { senha, condominioUid } = parseSenhaFromQr(senhaRaw ?? senhaRetirada)
+    const raw = senhaRaw ?? senhaRetirada
+    const { senha, condominioUid } = parseSenhaFromQr(raw)
     if (!senha || senha.length < 4) {
       setRetiradaMensagem('Digite/escaneie a senha completa')
       setEtapa('retirar_erro')
@@ -494,6 +563,7 @@ export default function PdvPage() {
     }
     if (retiradaProcessando) return
 
+    setSenhaRetirada('')
     setRetiradaProcessando(true)
     setRetiradaMensagem('Validando senha...')
     setEtapa('retirar_abrindo')
@@ -768,16 +838,13 @@ export default function PdvPage() {
 
   useEffect(() => {
     if (modo === 'retirar' && etapa === 'retirar_senha') {
-      if (!scannerAutoOpenedRef.current) {
-        scannerAutoOpenedRef.current = true
-        setTimeout(() => {
-          iniciarScanner()
-        }, 250)
-      }
+      setTimeout(() => {
+        senhaRetiradaInputRef.current?.focus()
+      }, 120)
       return
     }
     scannerAutoOpenedRef.current = false
-  }, [modo, etapa, iniciarScanner])
+  }, [modo, etapa])
 
   useEffect(() => {
     if (!modalScannerAberto) {
@@ -923,9 +990,10 @@ export default function PdvPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950/40 to-slate-950 text-white flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-center p-6">
         <div className="text-center">
-          <div className="text-lg font-extrabold text-white/80 animate-pulse">Ajustando...</div>
+          <Loader2 className="w-8 h-8 mx-auto animate-spin text-white/70" />
+          <div className="mt-4 text-white/70 font-semibold">Carregando...</div>
         </div>
       </div>
     )
@@ -933,7 +1001,7 @@ export default function PdvPage() {
 
   return (
     <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-6 overflow-auto">
-      <div className={`w-full ${etapa === 'modo' || etapa === 'bloco_apto' || etapa === 'tamanho' || etapa === 'sucesso' ? 'max-w-2xl' : 'max-w-lg'} transition-all`}>
+      <div className={`w-full ${etapa === 'modo' || etapa === 'bloco_apto' || etapa === 'tamanho' || etapa === 'sucesso' || etapa === 'retirar_senha' || etapa === 'retirar_abrindo' || etapa === 'retirar_sucesso' || etapa === 'retirar_erro' ? 'max-w-2xl' : 'max-w-lg'} transition-all`}>
 
         {/* ========== ETAPA: MODO (ENTREGAR / RETIRAR) ========== */}
         {etapa === 'modo' && (
@@ -989,115 +1057,106 @@ export default function PdvPage() {
         )}
 
         {modo === 'retirar' && etapa === 'retirar_senha' && (
-          <div className="max-w-5xl mx-auto px-4 py-10">
+          <div className="mx-auto px-4 py-10">
             <div className="flex items-center gap-3 mb-6">
               <button
                 type="button"
                 onClick={() => reiniciar()}
                 className="w-12 h-12 rounded-2xl bg-white/10 hover:bg-white/15 active:bg-white/20"
               >
-                <ArrowLeft className="w-5 h-5 mx-auto" />
+                <ArrowLeft className="w-5 h-5 mx-auto text-white" />
               </button>
               <div>
-                <div className="text-sm text-white/60">Retirada</div>
-                <div className="text-2xl font-extrabold">Leia o QRCode ou digite a senha</div>
+                <div className="text-sm text-emerald-300/90 font-bold">Retirada</div>
+                <div className="text-2xl font-extrabold text-white">Digite a senha</div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => reiniciar()}
+                className="ml-auto p-2.5 rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10 active:bg-white/15 transition-colors"
+                aria-label="Sair"
+                title="Sair"
+              >
+                <X className="w-6 h-6" />
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="text-white font-extrabold">Senha</div>
-                  <button
-                    type="button"
-                    onClick={iniciarScanner}
-                    className="h-11 px-4 rounded-2xl bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25"
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <Camera className="w-5 h-5" />
-                      Ler QRCode
-                    </span>
-                  </button>
-                </div>
-
-                <input
-                  ref={senhaRetiradaInputRef}
-                  value={senhaRetirada}
-                  onChange={(e) => setSenhaRetirada(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') validarERetirar()
-                  }}
-                  autoFocus
-                  placeholder="Aproxime o QRCode ou digite a senha"
-                  className="w-full h-14 rounded-2xl bg-black/30 border border-white/10 px-4 text-lg tracking-widest"
-                />
-
-                <div className="mt-4 flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => validarERetirar()}
-                    disabled={retiradaProcessando}
-                    className="flex-1 h-12 rounded-2xl bg-blue-500/20 hover:bg-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <span className="inline-flex items-center justify-center gap-2">
-                      {retiradaProcessando ? <Loader2 className="w-5 h-5 animate-spin" /> : <QrCode className="w-5 h-5" />}
-                      Validar e abrir
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleLimparRetirada}
-                    disabled={retiradaProcessando}
-                    className="w-20 h-12 rounded-2xl bg-white/10 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Limpar
-                  </button>
-                </div>
-
-                {retiradaMensagem && (
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 text-white/80">
-                    {retiradaMensagem}
+            <div className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-white/[0.08] via-white/[0.05] to-emerald-500/[0.08] p-5 shadow-[0_18px_60px_rgba(16,185,129,0.12)]">
+              <div className="space-y-5">
+                <div>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+                    <div className="text-white font-extrabold">Senha</div>
                   </div>
-                )}
-              </div>
 
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-                <div className="text-white font-extrabold mb-4">Painel numérico</div>
-                <div className="grid grid-cols-3 gap-3">
-                  {['1','2','3','4','5','6','7','8','9'].map(n => (
+                  <input
+                    ref={senhaRetiradaInputRef}
+                    value={senhaRetirada}
+                    readOnly
+                    inputMode="none"
+                    onFocus={(e) => e.currentTarget.blur()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') validarERetirar()
+                    }}
+                    autoFocus
+                    placeholder="Digite a senha"
+                    className="w-full h-12 rounded-2xl bg-black/30 border border-emerald-500/20 px-4 text-lg font-mono tracking-[0.35em] text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  />
+
+                  {retiradaMensagem && (
+                    <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 text-white/80">
+                      {retiradaMensagem}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-white/10 pt-5">
+                  <div className="grid grid-cols-3 gap-3">
+                    {['1','2','3','4','5','6','7','8','9'].map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => handleNumpadRetirada(n)}
+                        disabled={retiradaProcessando}
+                        className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <span className="text-white">{n}</span>
+                      </button>
+                    ))}
                     <button
-                      key={n}
                       type="button"
-                      onClick={() => handleNumpadRetirada(n)}
+                      onClick={handleLimparRetirada}
                       disabled={retiradaProcessando}
-                      className="h-16 rounded-2xl bg-white/10 hover:bg-white/15 active:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed text-xl font-extrabold"
+                      className="h-16 rounded-2xl bg-rose-500/20 text-rose-300 text-sm font-bold hover:bg-rose-500/30 active:bg-rose-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {n}
+                      Limpar
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={handleBackspaceRetirada}
-                    disabled={retiradaProcessando}
-                    className="h-16 rounded-2xl bg-white/10 hover:bg-white/15 active:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Delete className="w-6 h-6 mx-auto" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleNumpadRetirada('0')}
-                    disabled={retiradaProcessando}
-                    className="h-16 rounded-2xl bg-white/10 hover:bg-white/15 active:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed text-xl font-extrabold"
-                  >
-                    0
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleNumpadRetirada('0')}
+                      disabled={retiradaProcessando}
+                      className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="text-white">0</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBackspaceRetirada}
+                      disabled={retiradaProcessando}
+                      className="h-16 rounded-2xl bg-white/10 text-white flex items-center justify-center hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Delete className="w-6 h-6 text-white" />
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => validarERetirar()}
                     disabled={retiradaProcessando}
-                    className="h-16 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="mt-5 w-full h-16 rounded-3xl font-extrabold flex items-center justify-center gap-2 transition-all text-xl disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-xl hover:from-emerald-700 hover:to-green-700"
                   >
-                    <ArrowRight className="w-6 h-6 mx-auto" />
+                    Continuar
+                    <ArrowRight className="w-6 h-6" />
                   </button>
                 </div>
               </div>
@@ -1109,7 +1168,7 @@ export default function PdvPage() {
           <div className="max-w-3xl mx-auto px-4 py-16">
             <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-center">
               <Loader2 className="w-10 h-10 animate-spin mx-auto text-white/80" />
-              <div className="mt-4 text-2xl font-extrabold">Processando retirada</div>
+              <div className="mt-4 text-2xl font-extrabold text-white">Processando retirada</div>
               <div className="mt-2 text-white/70">{retiradaMensagem || 'Aguarde...'}</div>
             </div>
           </div>
@@ -1141,9 +1200,9 @@ export default function PdvPage() {
 
         {modo === 'retirar' && etapa === 'retirar_erro' && (
           <div className="max-w-3xl mx-auto px-4 py-16">
-            <div className="rounded-3xl border border-rose-500/20 bg-rose-500/10 p-8 text-center">
+            <div className="rounded-3xl border border-rose-500/20 bg-white/5 p-8 text-center backdrop-blur">
               <XCircle className="w-10 h-10 mx-auto text-rose-200" />
-              <div className="mt-4 text-2xl font-extrabold">Não foi possível liberar</div>
+              <div className="mt-4 text-2xl font-extrabold text-white">Não foi possível liberar</div>
               <div className="mt-2 text-white/80">{retiradaMensagem || 'Tente novamente.'}</div>
               <div className="mt-6 flex gap-3 justify-center">
                 <button
@@ -1152,14 +1211,14 @@ export default function PdvPage() {
                     setEtapa('retirar_senha')
                     setRetiradaMensagem('')
                   }}
-                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15"
+                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-semibold"
                 >
                   Tentar novamente
                 </button>
                 <button
                   type="button"
                   onClick={() => reiniciar()}
-                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15"
+                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-semibold"
                 >
                   Voltar
                 </button>
@@ -1219,14 +1278,14 @@ export default function PdvPage() {
                 <button
                   type="button"
                   onClick={irParaDigitacaoSenha}
-                  className="flex-1 h-12 rounded-2xl bg-white/10 hover:bg-white/15"
+                  className="flex-1 h-12 rounded-2xl bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25"
                 >
                   Digitar senha
                 </button>
                 <button
                   type="button"
                   onClick={() => iniciarScanner(cameraSelecionadaId)}
-                  className="flex-1 h-12 rounded-2xl bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25"
+                  className="flex-1 h-12 rounded-2xl bg-white/10 hover:bg-white/15"
                 >
                   Reiniciar câmera
                 </button>
@@ -1292,14 +1351,16 @@ export default function PdvPage() {
                   <span className={`text-xs font-bold tracking-wider uppercase ${campoAtivo === 'apto' ? 'text-emerald-400' : aptoValido ? 'text-emerald-500' : 'text-white/40'}`}>Apto</span>
                   {aptoValido && <CheckCircle2 className="w-4 h-4 text-emerald-400 ml-auto" />}
                 </div>
-                <div className={`text-3xl sm:text-4xl font-black min-h-[48px] ${
-                  aptoDigitado ? 'text-white' : 'text-white/20'
-                }`}>
-                  {aptoDigitado || '—'}
+                <div className="flex items-end justify-between gap-3">
+                  <div className={`text-3xl sm:text-4xl font-black min-h-[48px] ${
+                    aptoDigitado ? 'text-white' : 'text-white/20'
+                  }`}>
+                    {aptoDigitado || '—'}
+                  </div>
+                  {aptoDigitado && !aptoValido && blocoValido && (
+                    <div className="text-xs font-semibold text-rose-400 whitespace-nowrap">Apto não encontrado</div>
+                  )}
                 </div>
-                {aptoDigitado && !aptoValido && blocoValido && (
-                  <div className="text-xs font-semibold text-rose-400 mt-2">Apto não encontrado</div>
-                )}
               </button>
             </div>
 

@@ -11,7 +11,7 @@ export default async function handler(
   }
 
   try {
-    const { condominioUid, portaUid, porta } = req.body
+    const { condominioUid, portaUid, porta, testOnly } = req.body
 
     // Validações
     if (!condominioUid || !portaUid || !porta) {
@@ -102,6 +102,44 @@ export default async function handler(
     const esp32Url = `http://${esp32Ip}/abrir?condominio_uid=${condominioUid}&porta_uid=${portaUid}&porta=${portaParaEsp32}&token=${securityToken}`
     
     console.log(`[PROXY] URL final: ${esp32Url}`)
+
+    // Modo de teste: apenas verifica se o ESP32 responde (sem abrir porta)
+    if (testOnly) {
+      const testUrl = `http://${esp32Ip}/`
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 7000)
+
+      try {
+        const response = await fetch(testUrl, {
+          method: 'GET',
+          signal: controller.signal
+        })
+
+        const body = await response.text().catch(() => '')
+
+        return res.status(200).json({
+          success: true,
+          message: 'ESP32 online',
+          esp32Status: response.status,
+          esp32Response: body,
+          esp32Url: testUrl
+        })
+      } catch (error: any) {
+        const msg = error?.name === 'AbortError'
+          ? 'Timeout ao comunicar com o ESP32'
+          : (error?.message || 'Erro desconhecido')
+
+        return res.status(200).json({
+          success: false,
+          message: msg,
+          esp32Status: null,
+          esp32Response: msg,
+          esp32Url: testUrl
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
+    }
 
     // Enviar requisição para o ESP32
     const controller = new AbortController()

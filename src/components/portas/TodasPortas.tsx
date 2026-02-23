@@ -687,39 +687,22 @@ export default function TodasPortas() {
         }
         actions={
           <div className="w-full flex flex-col sm:flex-row sm:flex-wrap gap-2 items-stretch sm:items-center">
-            <button
-              onClick={() => setFiltro('todas')}
-              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
-                filtro === 'todas' ? 'bg-sky-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
-              }`}
+            <select
+              value={filtro}
+              onChange={(e) => setFiltro(e.target.value as any)}
+              className="px-4 py-2 rounded-xl font-semibold bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 transition-all"
             >
-              Todas
-            </button>
-            <button
-              onClick={() => setFiltro('disponiveis')}
-              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
-                filtro === 'disponiveis'
-                  ? 'bg-green-500 text-white shadow-md'
-                  : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
-              }`}
-            >
-              Disponíveis
-            </button>
-            <button
-              onClick={() => setFiltro('ocupadas')}
-              className={`px-4 py-2 rounded-xl font-semibold transition-all ${
-                filtro === 'ocupadas' ? 'bg-red-500 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
-              }`}
-            >
-              Ocupadas
-            </button>
+              <option value="todas">Todas</option>
+              <option value="disponiveis">Disponíveis</option>
+              <option value="ocupadas">Ocupadas</option>
+            </select>
 
             <select
               value={filtroTamanho}
               onChange={(e) => setFiltroTamanho(e.target.value)}
               className="px-4 py-2 rounded-xl font-semibold bg-white text-gray-700 hover:bg-gray-50 border border-gray-200 transition-all"
             >
-              <option value="todos">Todos tamanhos</option>
+              <option value="todos">Tamanhos</option>
               <option value="P">Tamanho P</option>
               <option value="M">Tamanho M</option>
               <option value="G">Tamanho G</option>
