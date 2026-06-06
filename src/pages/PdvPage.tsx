@@ -15,7 +15,12 @@ import {
   Phone,
   QrCode,
   Camera,
-  Sparkles
+  Sparkles,
+  LogOut,
+  Sun,
+  Moon,
+  Check,
+  Send
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -27,7 +32,9 @@ import {
   ocuparPortaViaApi,
   abrirPortaEsp32,
   fecharPortaEsp32,
+  atualizarStatusPorta,
   atualizarStatusFechaduraPorNumero,
+  atualizarSensorImaPorNumero,
   type Destinatario
 } from '../services/gaveteiroService'
 import type { Gaveteiro, Porta, Bloco, Apartamento } from '../types/gaveteiro'
@@ -35,10 +42,12 @@ import type { Gaveteiro, Porta, Bloco, Apartamento } from '../types/gaveteiro'
 type Etapa =
   | 'modo'
   | 'bloco_apto'
+  | 'apto'
   | 'tamanho'
   | 'confirmando'
   | 'sucesso'
   | 'erro'
+  | 'erro_fechamento'
   | 'retirar_senha'
   | 'retirar_abrindo'
   | 'retirar_sucesso'
@@ -46,14 +55,37 @@ type Etapa =
 type Modo = 'entregar' | 'retirar' | null
 
 export default function PdvPage() {
-  const { usuario, condominio } = useAuth()
+  // Dark mode automático: horário do dia ou preferência do sistema
+  const [temaEscuro, setTemaEscuro] = useState(false)
+  useEffect(() => {
+    const detectarTema = () => {
+      const hora = new Date().getHours()
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      // Escuro entre 18h e 6h, ou se o sistema preferir escuro
+      const deveSerEscuro = (hora >= 18 || hora < 6) || prefersDark
+      setTemaEscuro(deveSerEscuro)
+    }
+    detectarTema()
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    mediaQuery.addEventListener('change', detectarTema)
+    // Atualiza a cada minuto para capturar mudança de horário
+    const interval = setInterval(detectarTema, 60000)
+    return () => {
+      mediaQuery.removeEventListener('change', detectarTema)
+      clearInterval(interval)
+    }
+  }, [])
+
+  const { usuario, condominio, logout } = useAuth()
 
   // Estado geral
   const [etapa, setEtapa] = useState<Etapa>('modo')
+  const [animacaoKey, setAnimacaoKey] = useState(0)
   const [modo, setModo] = useState<Modo>(null)
   const [loading, setLoading] = useState(false)
   const [processando, setProcessando] = useState(false)
   const [mensagemErro, setMensagemErro] = useState('')
+  const [modalLogoutAberto, setModalLogoutAberto] = useState(false)
 
   // Dados carregados
   const [gaveteiros, setGaveteiros] = useState<Gaveteiro[]>([])
@@ -95,13 +127,16 @@ export default function PdvPage() {
   const [senhasGeradas, setSenhasGeradas] = useState<Array<{ bloco: string; apartamento: string; senha: string }>>([])
   const [progressoFechadura, setProgressoFechadura] = useState(0)
   const [fechaduraConfirmada, setFechaduraConfirmada] = useState(false)
+  const jaCarregouRef = useRef(false)
   const timerFechadura = useRef<ReturnType<typeof setInterval> | null>(null)
-  const [progressoNovaOperacao, setProgressoNovaOperacao] = useState(0)
-  const [cooldownNovaOperacaoAtivo, setCooldownNovaOperacaoAtivo] = useState(false)
-  const timerNovaOperacao = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fecharPortaAgoraRef = useRef<() => Promise<void>>(async () => {})
+  const [progressoAutoReiniciar, setProgressoAutoReiniciar] = useState(0)
+  const timerAutoReiniciar = useRef<ReturnType<typeof setInterval> | null>(null)
   const [modalComprovanteAberto, setModalComprovanteAberto] = useState(false)
+  const [modalCancelarAberto, setModalCancelarAberto] = useState(false)
   const [whatsappEntregador, setWhatsappEntregador] = useState('')
   const [fechandoPortaAgora, setFechandoPortaAgora] = useState(false)
+  const [erroFechadura, setErroFechadura] = useState('')
   const [comprovanteEnviando, setComprovanteEnviando] = useState(false)
   const [comprovanteErro, setComprovanteErro] = useState('')
 
@@ -149,7 +184,7 @@ export default function PdvPage() {
 
   const carregarDados = async () => {
     if (!condominio?.uid) return
-    setLoading(true)
+    if (!jaCarregouRef.current) setLoading(true)
     try {
       const [gaveteirosData, blocosData, apartamentosData] = await Promise.all([
         listarGaveteiros(condominio.uid),
@@ -167,6 +202,7 @@ export default function PdvPage() {
     } catch (err) {
       console.error('[PDV] Erro ao carregar dados:', err)
     } finally {
+      jaCarregouRef.current = true
       setLoading(false)
     }
   }
@@ -236,11 +272,32 @@ export default function PdvPage() {
   // Teclado numérico
   const handleNumpad = (num: string) => {
     if (campoAtivo === 'bloco') {
-      if (blocoDigitado.length < 4) setBlocoDigitado(prev => prev + num)
+      if (blocoDigitado.length < 4) {
+        const novoBloco = blocoDigitado + num
+        setBlocoDigitado(novoBloco)
+      }
     } else {
       if (aptoDigitado.length < 5) setAptoDigitado(prev => prev + num)
     }
   }
+
+  // Confirmar bloco com Enter ou autoavançar
+  const confirmarBloco = () => {
+    if (campoAtivo === 'bloco' && blocoDigitado) {
+      const blocoNormalizadoTemp = normalizarBloco(blocoDigitado)
+      if (blocoNormalizadoTemp) {
+        setBlocoDigitado(blocoNormalizadoTemp)
+        setCampoAtivo('apto')
+      }
+    }
+  }
+
+  // Auto-avançar para Apto quando bloco se tornar válido
+  useEffect(() => {
+    if (blocoValido && campoAtivo === 'bloco' && aptoDigitado === '') {
+      setCampoAtivo('apto')
+    }
+  }, [blocoValido])
 
   const handleNumpadRetirada = (num: string) => {
     if (senhaRetirada.length < 12) setSenhaRetirada(prev => prev + num)
@@ -274,6 +331,7 @@ export default function PdvPage() {
   const avancarParaTamanho = () => {
     if (!blocoValido || !aptoValido) return
     setEtapa('tamanho')
+    setAnimacaoKey(prev => prev + 1)
   }
 
   // Selecionar tamanho e porta
@@ -285,117 +343,103 @@ export default function PdvPage() {
     setPortaSelecionada(disponiveis[0])
   }
 
-  // Confirmar ocupação
+  // Tentar abrir uma porta específica via ESP32 (pré-teste + abertura real)
+  const tentarAbrirPorta = async (porta: Porta): Promise<boolean> => {
+    if (!condominio?.uid) return false
+
+    // 1) Pré-teste
+    try {
+      const testResp = await fetch('/api/proxy/abrir-porta-individual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          condominioUid: condominio.uid,
+          portaUid: porta.uid,
+          porta: porta.numero_porta,
+          testOnly: true
+        })
+      })
+      const testData = await testResp.json().catch(() => null)
+      if (!testResp.ok || !testData?.success) return false
+    } catch {
+      return false
+    }
+
+    // 2) Abrir porta física
+    try {
+      const resp = await fetch('/api/proxy/abrir-porta-individual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          condominioUid: condominio.uid,
+          portaUid: porta.uid,
+          porta: porta.numero_porta
+        })
+      })
+      const data = await resp.json().catch(() => null)
+      if (!resp.ok || !data?.success) return false
+
+      // Sucesso — atualiza sensor de ímã para aberto
+      try {
+        await atualizarSensorImaPorNumero(
+          porta.gaveteiro_uid,
+          porta.numero_porta,
+          'aberto'
+        )
+      } catch (err) {
+        console.warn('[PDV] Falha ao atualizar sensor_ima para aberto:', err)
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Confirmar ocupação — tenta portas disponíveis do tamanho até abrir
   const confirmarOcupacao = async () => {
-    if (!portaSelecionada || !condominio?.uid) return
+    if (!tamanhoSelecionado || !condominio?.uid) return
+
+    const disponiveis = portasDisponiveisPorTamanho[tamanhoSelecionado]
+    if (disponiveis.length === 0) {
+      setMensagemErro('Nenhuma porta disponível para este tamanho.')
+      setEtapa('erro')
+      return
+    }
 
     setProcessando(true)
     setEtapa('confirmando')
     setMensagemErro('')
 
-    try {
-      // 1) Pré-teste de comunicação com o ESP32 (sem abrir porta).
-      try {
-        const espTestResponse = await fetch('/api/proxy/abrir-porta-individual', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            condominioUid: condominio?.uid,
-            portaUid: portaSelecionada.uid,
-            porta: portaSelecionada.numero_porta,
-            testOnly: true
-          })
-        })
+    // Começa da porta atual (se estiver na lista) ou da primeira
+    const idxAtual = portaSelecionada
+      ? disponiveis.findIndex(p => p.uid === portaSelecionada.uid)
+      : -1
+    const inicio = idxAtual >= 0 ? idxAtual : 0
 
-        const espTestData = await espTestResponse.json().catch(() => null)
-        if (!espTestResponse.ok || !espTestData?.success) {
-          const rawMsg = String(espTestData?.message || espTestData?.esp32Response || '')
-          const isFetchFailed = rawMsg.toLowerCase().includes('fetch failed')
-          const isTimeout = rawMsg.toLowerCase().includes('timeout')
+    for (let i = inicio; i < disponiveis.length; i++) {
+      const porta = disponiveis[i]
+      setPortaSelecionada(porta)
+      console.log(`[PDV] Tentando porta ${porta.numero_porta} (${i + 1}/${disponiveis.length})`)
 
-          const msg = isFetchFailed
-            ? 'Não foi possível comunicar com o dispositivo (ESP32). Verifique se o gaveteiro está ligado e conectado na rede.'
-            : isTimeout
-              ? 'O dispositivo (ESP32) não respondeu a tempo. Verifique a conexão e tente novamente.'
-              : 'Não foi possível comunicar com o dispositivo (ESP32). Tente novamente.'
-
-          setMensagemErro(msg)
-          setEtapa('erro')
-          return
-        }
-      } catch (err) {
-        console.error('[PDV] Pré-teste ESP32 falhou:', err)
-        setMensagemErro(err instanceof Error ? err.message : 'Falha ao comunicar com o dispositivo (ESP32).')
-        setEtapa('erro')
+      const abriu = await tentarAbrirPorta(porta)
+      if (abriu) {
+        setEtapa('sucesso')
+        setAnimacaoKey(prev => prev + 1)
+        setProcessando(false)
         return
       }
 
-      // 2) Abrir porta física. Se falhar, aborta sem ocupar/gerar senha.
-      try {
-        console.log('[PDV] Abrindo porta física ao confirmar entrega:', portaSelecionada.numero_porta)
-
-        const response = await fetch('/api/proxy/abrir-porta-individual', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            condominioUid: condominio?.uid,
-            portaUid: portaSelecionada.uid,
-            porta: portaSelecionada.numero_porta
-          })
-        })
-
-        const data = await response.json().catch(() => null)
-        if (!response.ok || !data?.success) {
-          const rawMsg = String(data?.esp32Response || data?.message || '')
-          const isFetchFailed = rawMsg.toLowerCase().includes('fetch failed')
-          const isTimeout = rawMsg.toLowerCase().includes('timeout')
-
-          const msg = isFetchFailed
-            ? 'Não foi possível comunicar com o dispositivo (ESP32). Verifique se o gaveteiro está ligado e conectado na rede.'
-            : isTimeout
-              ? 'O dispositivo (ESP32) não respondeu a tempo. Verifique a conexão e tente novamente.'
-              : (data?.message || 'Não foi possível abrir a porta. Tente novamente.')
-
-          setMensagemErro(msg)
-          setEtapa('erro')
-          return
-        }
-
-        console.log('[PDV] Porta aberta com sucesso:', data.message)
-      } catch (err) {
-        console.error('[PDV] Erro ao abrir porta:', err)
-        setMensagemErro(err instanceof Error ? err.message : 'Falha ao comunicar com o dispositivo (ESP32).')
-        setEtapa('erro')
-        return
-      }
-
-      // 3) Com a porta aberta, confirmar ocupação e gerar senhas.
-      const destinatarios: Destinatario[] = [{
-        bloco: blocoNormalizado || blocoDigitado,
-        apartamento: aptoDigitado,
-        quantidade: 1
-      }]
-
-      const resultado = await ocuparPortaViaApi({
-        portaUid: portaSelecionada.uid,
-        condominioUid: condominio.uid,
-        destinatarios,
-        usuarioUid: usuario?.uid,
-        observacao: `Ocupação via PDV - Armário ${tamanhoSelecionado}`
-      })
-
-      if (resultado.senhas) {
-        setSenhasGeradas(resultado.senhas)
-      }
-
-      setEtapa('sucesso')
-    } catch (err) {
-      console.error('[PDV] Erro ao confirmar ocupação:', err)
-      setMensagemErro(err instanceof Error ? err.message : 'Erro ao processar entrega')
-      setEtapa('erro')
-    } finally {
-      setProcessando(false)
+      console.warn(`[PDV] Porta ${porta.numero_porta} falhou, tentando próxima...`)
     }
+
+    // Todas as portas do tamanho falharam
+    console.error('[PDV] Todas as portas disponíveis falharam.')
+    setMensagemErro(
+      'Não foi possível abrir nenhuma porta disponível deste tamanho. ' +
+      'Verifique se o armário está ligado e conectado, ou escolha outro tamanho.'
+    )
+    setEtapa('erro')
+    setProcessando(false)
   }
 
   // Timer de progresso na tela de sucesso (simula espera do sensor de fechadura)
@@ -421,8 +465,8 @@ export default function PdvPage() {
       setProgressoFechadura(pct)
 
       if (pct >= 100) {
-        setFechaduraConfirmada(true)
         if (timerFechadura.current) clearInterval(timerFechadura.current)
+        void fecharPortaAgoraRef.current()
       }
     }, 100)
 
@@ -434,47 +478,55 @@ export default function PdvPage() {
     }
   }, [etapa])
 
-  // Cooldown para liberar Nova operação após entrega confirmada
-  const TEMPO_NOVA_OPERACAO = 90 // segundos
+  // Auto-reiniciar 60s após entrega confirmada (cancelado se comprovante aberto)
+  const TEMPO_AUTO_REINICIAR = 60 // segundos
+  const modalFechadoManualmente = useRef(false)
   useEffect(() => {
-    if (etapa !== 'sucesso' || !fechaduraConfirmada) {
-      if (timerNovaOperacao.current) {
-        clearInterval(timerNovaOperacao.current)
-        timerNovaOperacao.current = null
+    if (etapa !== 'sucesso' || !fechaduraConfirmada || modalComprovanteAberto) {
+      if (timerAutoReiniciar.current) {
+        clearInterval(timerAutoReiniciar.current)
+        timerAutoReiniciar.current = null
       }
-      setCooldownNovaOperacaoAtivo(false)
-      setProgressoNovaOperacao(0)
+      if (!modalComprovanteAberto) {
+        setProgressoAutoReiniciar(0)
+        // Se o modal foi fechado manualmente, não reiniciar automaticamente
+        if (modalFechadoManualmente.current) {
+          modalFechadoManualmente.current = false
+        }
+      }
       return
     }
 
-    setCooldownNovaOperacaoAtivo(true)
-    setProgressoNovaOperacao(0)
+    // Não iniciar auto-reiniciar se o modal foi fechado manualmente
+    if (modalFechadoManualmente.current) {
+      modalFechadoManualmente.current = false
+      return
+    }
+
+    setProgressoAutoReiniciar(0)
     const inicio = Date.now()
 
-    timerNovaOperacao.current = setInterval(() => {
+    timerAutoReiniciar.current = setInterval(() => {
       const elapsed = (Date.now() - inicio) / 1000
-      const pct = Math.min((elapsed / TEMPO_NOVA_OPERACAO) * 100, 100)
-      setProgressoNovaOperacao(pct)
+      const pct = Math.min((elapsed / TEMPO_AUTO_REINICIAR) * 100, 100)
+      setProgressoAutoReiniciar(pct)
 
       if (pct >= 100) {
-        setCooldownNovaOperacaoAtivo(false)
-        if (timerNovaOperacao.current) {
-          clearInterval(timerNovaOperacao.current)
-          timerNovaOperacao.current = null
+        if (timerAutoReiniciar.current) {
+          clearInterval(timerAutoReiniciar.current)
+          timerAutoReiniciar.current = null
         }
-        setTimeout(() => {
-          reiniciar()
-        }, 300)
+        setTimeout(() => { reiniciar() }, 300)
       }
     }, 200)
 
     return () => {
-      if (timerNovaOperacao.current) {
-        clearInterval(timerNovaOperacao.current)
-        timerNovaOperacao.current = null
+      if (timerAutoReiniciar.current) {
+        clearInterval(timerAutoReiniciar.current)
+        timerAutoReiniciar.current = null
       }
     }
-  }, [etapa, fechaduraConfirmada])
+  }, [etapa, fechaduraConfirmada, modalComprovanteAberto])
 
   // Monitorar sensor da porta selecionada via realtime
   useEffect(() => {
@@ -490,13 +542,8 @@ export default function PdvPage() {
     const sensorFechado = ['fechado', 'closed', '1'].includes(sensorStatus)
 
     if (sensorFechado) {
-      console.log('[PDV SENSOR] Compartimento fechado detectado!')
-      setFechaduraConfirmada(true)
-      setProgressoFechadura(100)
-      if (timerFechadura.current) {
-        clearInterval(timerFechadura.current)
-        timerFechadura.current = null
-      }
+      console.log('[PDV SENSOR] Compartimento fechado detectado — executando fecharPortaAgora')
+      void fecharPortaAgoraRef.current()
     }
   }, [etapa, todasPortas, portaSelecionada, fechaduraConfirmada])
 
@@ -518,20 +565,52 @@ export default function PdvPage() {
     setModalScannerAberto(false)
     setProgressoFechadura(0)
     setFechaduraConfirmada(false)
-    setProgressoNovaOperacao(0)
-    setCooldownNovaOperacaoAtivo(false)
+    setProgressoAutoReiniciar(0)
     setModalComprovanteAberto(false)
     setWhatsappEntregador('')
+    setErroFechadura('')
     if (timerFechadura.current) {
       clearInterval(timerFechadura.current)
       timerFechadura.current = null
     }
-    if (timerNovaOperacao.current) {
-      clearInterval(timerNovaOperacao.current)
-      timerNovaOperacao.current = null
+    if (timerAutoReiniciar.current) {
+      clearInterval(timerAutoReiniciar.current)
+      timerAutoReiniciar.current = null
     }
     carregarDados()
   }
+
+  // Atalhos de teclado
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Esc para voltar ou cancelar
+      if (e.key === 'Escape') {
+        if (etapa === 'modo') {
+          return
+        }
+        if (etapa === 'bloco_apto' || etapa === 'apto' || etapa === 'tamanho') {
+          voltar()
+        } else {
+          reiniciar()
+        }
+      }
+
+      // Enter para avançar
+      if (e.key === 'Enter') {
+        if (etapa === 'bloco_apto' && blocoValido) {
+          setEtapa('apto')
+          setAnimacaoKey(prev => prev + 1)
+        } else if (etapa === 'apto' && aptoValido) {
+          avancarParaTamanho()
+        } else if (etapa === 'tamanho' && tamanhoSelecionado && portaSelecionada) {
+          confirmarOcupacao()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [etapa, blocoValido, aptoValido, tamanhoSelecionado, portaSelecionada])
 
   const parseSenhaFromQr = (raw: string): { senha: string; condominioUid?: string } => {
     const s = String(raw || '').trim()
@@ -714,7 +793,6 @@ export default function PdvPage() {
     if (typeof window === 'undefined') return
     try {
       pararScanner()
-      setModalScannerAberto(true)
 
       // Aguardar o modal renderizar e o <video> montar
       const startedAt = Date.now()
@@ -822,19 +900,18 @@ export default function PdvPage() {
       } else if (name === 'NotReadableError' || name === 'TrackStartError') {
         setRetiradaMensagem('A câmera está em uso por outro aplicativo/aba. Feche e tente novamente.')
       } else {
-        const msg = err instanceof Error ? err.message : 'Não foi possível acessar a câmera para ler o QRCode'
-        setRetiradaMensagem(msg || 'Não foi possível acessar a câmera para ler o QRCode')
+        // Verificar se está acessando via IP (não localhost)
+        const hostname = window.location.hostname
+        if (hostname !== 'localhost' && hostname !== '127.0.0.1' && window.location.protocol === 'http:') {
+          setRetiradaMensagem('A câmera requer HTTPS. Acesse via localhost ou configure HTTPS.')
+        } else {
+          const msg = err instanceof Error ? err.message : 'Não foi possível acessar a câmera para ler o QRCode'
+          setRetiradaMensagem(msg || 'Não foi possível acessar a câmera para ler o QRCode')
+        }
       }
       setEtapa('retirar_erro')
     }
   }, [validarERetirar, pararScanner, cameraSelecionadaId, listarCameras])
-
-  const irParaDigitacaoSenha = useCallback(() => {
-    setModalScannerAberto(false)
-    setTimeout(() => {
-      senhaRetiradaInputRef.current?.focus()
-    }, 120)
-  }, [])
 
   useEffect(() => {
     if (modo === 'retirar' && etapa === 'retirar_senha') {
@@ -851,11 +928,15 @@ export default function PdvPage() {
       pararScanner()
     } else {
       listarCameras()
+      // Iniciar scanner automaticamente quando modal abre
+      setTimeout(() => {
+        iniciarScanner(cameraSelecionadaId)
+      }, 100)
     }
     return () => {
       pararScanner()
     }
-  }, [modalScannerAberto, pararScanner, listarCameras])
+  }, [modalScannerAberto, pararScanner, listarCameras, cameraSelecionadaId])
 
   const formatarWhatsapp = useCallback((digits: string) => {
     const d = (digits || '').replace(/\D/g, '').slice(0, 11)
@@ -877,53 +958,73 @@ export default function PdvPage() {
   }
 
   const fecharPortaAgora = useCallback(async () => {
-    if (!portaSelecionada) return
-
-    const gaveteiro = gaveteiros.find(g => g.uid === portaSelecionada.gaveteiro_uid)
-    if (!gaveteiro?.esp32_ip) {
-      alert('ESP32 não configurado para este gaveteiro. Configure o campo esp32_ip no cadastro do gaveteiro.')
-      return
-    }
-
-    if (fechandoPortaAgora) return
+    if (!portaSelecionada || fechandoPortaAgora) return
 
     setFechandoPortaAgora(true)
+    setErroFechadura('')
     try {
-      const resp = await fecharPortaEsp32({
-        baseUrl: '/esp32',
-        token: gaveteiro.esp32_token || 'teste',
-        numeroPorta: portaSelecionada.numero_porta,
-        timeoutMs: 10000
-      })
-
-      if (!resp?.ok) {
-        throw new Error(resp?.message || 'Falha ao fechar a porta')
+      // 1) Tentar fechar via ESP32 (opcional — não bloqueia se não configurado)
+      const gaveteiro = gaveteiros.find(g => g.uid === portaSelecionada.gaveteiro_uid)
+      if (gaveteiro?.esp32_ip) {
+        try {
+          const resp = await fecharPortaEsp32({
+            baseUrl: '/esp32',
+            token: gaveteiro.esp32_token || 'teste',
+            numeroPorta: portaSelecionada.numero_porta,
+            timeoutMs: 10000
+          })
+          if (resp?.ok) {
+            await atualizarStatusFechaduraPorNumero(
+              portaSelecionada.gaveteiro_uid,
+              portaSelecionada.numero_porta,
+              'fechada'
+            ).catch(e => console.warn('[PDV] Falha ao atualizar fechadura:', e))
+            await atualizarSensorImaPorNumero(
+              portaSelecionada.gaveteiro_uid,
+              portaSelecionada.numero_porta,
+              'fechado'
+            ).catch(e => console.warn('[PDV] Falha ao atualizar sensor_ima:', e))
+          }
+        } catch (err) {
+          console.warn('[PDV] ESP32 indisponível ao fechar porta (ignorado):', err)
+        }
+      } else {
+        console.warn('[PDV] esp32_ip não configurado — confirmando fechamento manual do usuário')
       }
 
+      // 2) Ocupar porta no banco e gerar senhas
       try {
-        await atualizarStatusFechaduraPorNumero(
-          portaSelecionada.gaveteiro_uid,
-          portaSelecionada.numero_porta,
-          'fechada'
-        )
+        const destinatarios: Destinatario[] = [{
+          bloco: blocoNormalizado || blocoDigitado,
+          apartamento: aptoDigitado,
+          quantidade: 1
+        }]
+        const resultado = await ocuparPortaViaApi({
+          portaUid: portaSelecionada.uid,
+          condominioUid: condominio!.uid,
+          destinatarios,
+          usuarioUid: usuario?.uid,
+          observacao: `Ocupação via PDV - Armário ${tamanhoSelecionado}`
+        })
+        if (resultado.senhas) {
+          setSenhasGeradas(resultado.senhas)
+        }
       } catch (err) {
-        console.warn('[PDV] Falha ao atualizar status da fechadura no banco:', err)
+        console.warn('[PDV] Falha ao registrar ocupação no banco:', err)
       }
 
+      // 3) Confirmar fechamento — usuário clicou no botão = confirmação manual
       setFechaduraConfirmada(true)
       setProgressoFechadura(100)
       if (timerFechadura.current) {
         clearInterval(timerFechadura.current)
         timerFechadura.current = null
       }
-    } catch (err) {
-      console.error('[PDV] Erro ao fechar porta via ESP32:', err)
-      const msg = err instanceof Error ? err.message : 'Erro ao fechar a porta'
-      alert(msg)
     } finally {
       setFechandoPortaAgora(false)
     }
-  }, [portaSelecionada, gaveteiros, fechandoPortaAgora])
+  }, [portaSelecionada, gaveteiros, fechandoPortaAgora, blocoNormalizado, blocoDigitado, aptoDigitado, condominio, usuario, tamanhoSelecionado])
+  fecharPortaAgoraRef.current = fecharPortaAgora
 
   const enviarComprovante = async () => {
     const digits = whatsappEntregador.replace(/\D/g, '')
@@ -961,6 +1062,7 @@ export default function PdvPage() {
       }
 
       setModalComprovanteAberto(false)
+      modalFechadoManualmente.current = true
       reiniciar()
     } catch (e) {
       console.error('[PDV] Erro ao enviar comprovante:', e)
@@ -973,11 +1075,17 @@ export default function PdvPage() {
   // Voltar
   const voltar = () => {
     if (etapa === 'tamanho') {
-      setEtapa('bloco_apto')
+      setEtapa('apto')
+      setAnimacaoKey(prev => prev + 1)
       setTamanhoSelecionado(null)
       setPortaSelecionada(null)
+    } else if (etapa === 'apto') {
+      setEtapa('bloco_apto')
+      setAnimacaoKey(prev => prev + 1)
+      setAptoDigitado('')
     } else if (etapa === 'bloco_apto') {
       setEtapa('modo')
+      setAnimacaoKey(prev => prev + 1)
       setModo(null)
       setBlocoDigitado('')
       setAptoDigitado('')
@@ -990,47 +1098,162 @@ export default function PdvPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-center p-6">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 mx-auto animate-spin text-white/70" />
-          <div className="mt-4 text-white/70 font-semibold">Carregando...</div>
+      <div className={`min-h-screen bg-gradient-to-br from-gray-100 via-blue-200/70 to-blue-100/50 flex items-center justify-center p-4 relative`}>
+        <div className="absolute inset-0">
+          <div className="absolute bottom-0 left-0 right-0 h-96 bg-gradient-to-t from-blue-500/20 to-transparent rounded-t-[100%] transform translate-y-1/2"></div>
+          <div className="absolute bottom-0 left-0 right-0 h-80 bg-gradient-to-t from-sky-400/15 to-transparent rounded-t-[80%] transform translate-y-1/3"></div>
+          <div className="absolute bottom-0 left-0 right-0 h-64 bg-gradient-to-t from-cyan-300/10 to-transparent rounded-t-[60%] transform translate-y-1/4"></div>
+          <div className="absolute top-20 left-20 w-32 h-32 bg-gradient-to-br from-blue-300/10 to-cyan-300/10 rounded-full blur-2xl"></div>
+          <div className="absolute top-40 right-32 w-48 h-48 bg-gradient-to-br from-sky-200/8 to-blue-200/8 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-40 left-40 w-40 h-40 bg-gradient-to-br from-cyan-200/8 to-sky-300/8 rounded-full blur-2xl"></div>
+        </div>
+        <div className="text-center relative z-10">
+          <Loader2 className={`w-8 h-8 mx-auto animate-spin text-gray-600`} />
+          <div className={`mt-4 font-semibold text-gray-600`}>Carregando...</div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-6 overflow-auto">
-      <div className={`w-full ${etapa === 'modo' || etapa === 'bloco_apto' || etapa === 'tamanho' || etapa === 'sucesso' || etapa === 'retirar_senha' || etapa === 'retirar_abrindo' || etapa === 'retirar_sucesso' || etapa === 'retirar_erro' ? 'max-w-2xl' : 'max-w-lg'} transition-all`}>
+    <div className={`h-screen ${temaEscuro ? 'bg-[#0f172a]' : 'bg-[#F4F7FC]'} flex flex-col items-center overflow-hidden relative transition-colors duration-700`}>
+      {/* Header discreto: Logo + Sair + Toggle tema */}
+      <div className="absolute top-2 left-4 right-4 z-50 flex items-center justify-between pointer-events-none">
+        <img
+          src={temaEscuro ? '/logo-airebox_noite.png' : '/logo-airebox.png?v=2'}
+          alt="AireBox"
+          className="w-16 h-16 sm:w-20 sm:h-20 h-auto pointer-events-auto"
+          draggable={false}
+        />
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => setTemaEscuro(v => !v)}
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border shadow-sm ${
+              temaEscuro
+                ? 'bg-white/10 border-white/20 text-yellow-300 hover:bg-white/20'
+                : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+            title={temaEscuro ? 'Modo claro' : 'Modo escuro'}
+            aria-label={temaEscuro ? 'Ativar modo claro' : 'Ativar modo escuro'}
+          >
+            {temaEscuro ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setModalLogoutAberto(true)}
+            className={`h-9 px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all border shadow-sm ${
+              temaEscuro
+                ? 'bg-white/10 border-white/20 text-white/90 hover:bg-white/20 hover:text-white'
+                : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+            title="Sair do sistema"
+          >
+            <LogOut size={14} />
+            <span className="hidden sm:inline">Sair</span>
+          </button>
+        </div>
+      </div>
 
+      {/* Rodapé com instrução - só aparece na etapa sucesso antes de confirmar */}
+      {etapa === 'sucesso' && !fechaduraConfirmada && (
+        <div className="absolute bottom-0 left-0 right-0 z-40 py-4 px-4 text-center">
+          <p className={`text-lg font-medium ${temaEscuro ? 'text-gray-400' : 'text-gray-500'}`}>
+            Coloque a encomenda e feche a porta
+          </p>
+        </div>
+      )}
+
+      {/* Modal de confirmação de logout */}
+      {modalLogoutAberto && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setModalLogoutAberto(false)}></div>
+          <div className={`relative w-full max-w-sm rounded-3xl p-8 text-center shadow-2xl ${temaEscuro ? 'bg-[#1e293b] border border-white/10' : 'bg-white border border-gray-200'}`}>
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5 ${temaEscuro ? 'bg-rose-500/20 text-rose-400' : 'bg-rose-50 text-rose-500'}`}>
+              <LogOut size={28} />
+            </div>
+            <h3 className={`text-xl font-black mb-2 ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>Sair do sistema?</h3>
+            <p className={`text-sm font-medium mb-8 ${temaEscuro ? 'text-gray-400' : 'text-gray-500'}`}>Você será desconectado e redirecionado para a tela de login.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setModalLogoutAberto(false)}
+                className={`flex-1 h-12 rounded-2xl font-semibold text-sm transition-all active:scale-95 ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  logout()
+                  window.location.href = '/login'
+                }}
+                className="flex-1 h-12 rounded-2xl font-bold text-sm bg-rose-500 text-white shadow-lg hover:bg-rose-600 transition-all active:scale-95"
+              >
+                Sair
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ondas suaves no rodapé */}
+      <div className="absolute bottom-0 left-0 right-0 h-[45vh] overflow-hidden pointer-events-none">
+        <div className={`absolute bottom-[-10%] left-[-10%] right-[-10%] h-full rounded-[50%] opacity-70 ${temaEscuro ? 'bg-[#1e293b]' : 'bg-blue-100'}`}></div>
+        <div className={`absolute bottom-[-15%] left-[-5%] right-[-5%] h-[90%] rounded-[45%] opacity-50 ${temaEscuro ? 'bg-[#1e293b]' : 'bg-blue-200'}`}></div>
+        <div className={`absolute bottom-[-20%] left-[0%] right-[0%] h-[80%] rounded-[40%] opacity-30 ${temaEscuro ? 'bg-[#1e293b]' : 'bg-blue-300'}`}></div>
+      </div>
+      {/* Glows decorativos sutis */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-24 left-24 w-40 h-40 bg-blue-300/[0.06] rounded-full blur-3xl"></div>
+        <div className="absolute top-32 right-40 w-56 h-56 bg-sky-300/[0.04] rounded-full blur-3xl"></div>
+      </div>
+      
+      {/* Conteúdo */}
+      <div className="flex-1 flex items-center justify-center w-full px-4 py-0 relative z-10 overflow-hidden">
+      <div className={`w-full ${etapa === 'modo' ? '' : etapa === 'bloco_apto' || etapa === 'apto' || etapa === 'tamanho' || etapa === 'sucesso' || etapa === 'retirar_senha' || etapa === 'retirar_abrindo' || etapa === 'retirar_sucesso' || etapa === 'retirar_erro' ? 'max-w-2xl' : 'max-w-lg'} transition-all`}>
+
+        
+        
         {/* ========== ETAPA: MODO (ENTREGAR / RETIRAR) ========== */}
         {etapa === 'modo' && (
-          <div className="max-w-5xl mx-auto px-4 py-10">
-            <div className="text-center mb-10">
-              <div className="text-sm font-bold tracking-[0.3em] text-white/30 uppercase">PDV Armários</div>
-              <div className="text-3xl font-extrabold text-white mt-2">O que deseja fazer?</div>
+          <div className="w-full flex flex-col items-center justify-center px-4 sm:px-6">
+
+            {/* ── Header ── */}
+            <div className="flex flex-col items-center gap-2 sm:gap-3 mb-8 sm:mb-10">
+              <h1 className={`text-xl sm:text-2xl md:text-[2.2rem] font-black tracking-tight leading-tight text-center ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>
+                Como podemos <span className="text-[#1976FF]">ajudar?</span>
+              </h1>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            {/* Cards */}
+            <div className="flex flex-col md:flex-row items-stretch justify-center gap-4 sm:gap-6 md:gap-8 w-full max-w-2xl">
+              {/* Card Entregar */}
               <button
                 type="button"
                 onClick={() => {
                   setModo('entregar')
                   setEtapa('bloco_apto')
+                  setAnimacaoKey(prev => prev + 1)
                 }}
-                className="group relative overflow-hidden rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-emerald-600/20 to-green-600/20 p-8 text-left hover:from-emerald-600/30 hover:to-green-600/30 transition-all hover:shadow-xl hover:shadow-emerald-500/20"
+                className="group relative w-full md:w-1/2 min-h-[110px] sm:min-h-[130px] md:min-h-[160px] lg:min-h-[180px] rounded-2xl sm:rounded-[28px] bg-white shadow-[0_2px_24px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_32px_rgba(25,118,255,0.15)] active:shadow-[0_4px_20px_rgba(25,118,255,0.12)] transition-all duration-300 active:-translate-y-1 flex items-center px-3 sm:px-5 md:px-8 lg:px-10 select-none overflow-hidden"
               >
-                <div className="flex flex-col items-center justify-center gap-5">
-                  <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-xl shadow-emerald-500/25">
-                    <Inbox className="w-12 h-12 text-white" />
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl sm:text-4xl font-black text-white tracking-tight">Entregar</div>
-                    <div className="text-sm text-emerald-300/80 mt-1">Depositar encomenda</div>
-                  </div>
+                {/* Ícone */}
+                <div className="w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 lg:w-12 lg:h-12 rounded-xl bg-gradient-to-br from-[#1976FF] to-[#1255cc] flex items-center justify-center shadow-lg shadow-blue-500/20 flex-shrink-0">
+                  <Inbox className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 lg:w-6 lg:h-6 text-white" strokeWidth={2} />
+                </div>
+
+                {/* Texto */}
+                <div className="flex-1 flex flex-col justify-center ml-2 sm:ml-3 md:ml-6 lg:ml-7 text-left min-w-0 overflow-hidden">
+                  <div className="text-[1.1rem] sm:text-[1.3rem] md:text-[1.6rem] lg:text-[1.85rem] font-black text-[#1a1a2e] leading-tight">Entregar</div>
+                  <div className="text-[10px] sm:text-xs md:text-base text-gray-400 font-medium mt-0.5 sm:mt-1">Deixar no armário</div>
+                </div>
+
+                {/* Seta */}
+                <div className="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 md:w-10 md:h-10 rounded-full bg-gray-50 group-hover:bg-[#1976FF]/10 transition-colors duration-300 flex-shrink-0 ml-1 sm:ml-2">
+                  <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 md:w-5 md:h-5 text-[#1976FF] group-hover:translate-x-[2px] sm:group-hover:translate-x-[5px] transition-transform duration-300" />
                 </div>
               </button>
 
+              {/* Card Retirar */}
               <button
                 type="button"
                 onClick={() => {
@@ -1040,16 +1263,22 @@ export default function PdvPage() {
                   setRetiradaPortaInfo(null)
                   setSenhaRetirada('')
                 }}
-                className="group relative overflow-hidden rounded-3xl border border-blue-500/30 bg-gradient-to-br from-blue-600/20 to-indigo-600/20 p-8 text-left hover:from-blue-600/30 hover:to-indigo-600/30 transition-all hover:shadow-xl hover:shadow-blue-500/20"
+                className="group relative w-full md:w-1/2 min-h-[110px] sm:min-h-[130px] md:min-h-[160px] lg:min-h-[180px] rounded-2xl sm:rounded-[28px] bg-white shadow-[0_2px_24px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_32px_rgba(32,211,194,0.15)] active:shadow-[0_4px_20px_rgba(32,211,194,0.12)] transition-all duration-300 active:-translate-y-1 flex items-center px-3 sm:px-5 md:px-8 lg:px-10 select-none overflow-hidden"
               >
-                <div className="flex flex-col items-center justify-center gap-5">
-                  <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-xl shadow-blue-500/20">
-                    <ShoppingCart className="w-12 h-12 text-white" />
-                  </div>
-                  <div className="text-center">
-                    <div className="text-3xl sm:text-4xl font-black text-white tracking-tight">Retirar</div>
-                    <div className="text-sm text-blue-300/80 mt-1">Retirar encomenda</div>
-                  </div>
+                {/* Ícone */}
+                <div className="w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 lg:w-12 lg:h-12 rounded-xl bg-gradient-to-br from-[#20D3C2] to-[#17a89a] flex items-center justify-center shadow-lg shadow-teal-500/20 flex-shrink-0">
+                  <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5 lg:w-6 lg:h-6 text-white" strokeWidth={2} />
+                </div>
+
+                {/* Texto */}
+                <div className="flex-1 flex flex-col justify-center ml-2 sm:ml-3 md:ml-6 lg:ml-7 text-left min-w-0 overflow-hidden">
+                  <div className="text-[1.1rem] sm:text-[1.3rem] md:text-[1.6rem] lg:text-[1.85rem] font-black text-[#1a1a2e] leading-tight">Retirar</div>
+                  <div className="text-[10px] sm:text-xs md:text-base text-gray-400 font-medium mt-0.5 sm:mt-1">Retirar do armário</div>
+                </div>
+
+                {/* Seta */}
+                <div className="flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 md:w-10 md:h-10 rounded-full bg-gray-50 group-hover:bg-[#20D3C2]/10 transition-colors duration-300 flex-shrink-0 ml-1 sm:ml-2">
+                  <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 md:w-5 md:h-5 text-[#20D3C2] group-hover:translate-x-[2px] sm:group-hover:translate-x-[5px] transition-transform duration-300" />
                 </div>
               </button>
             </div>
@@ -1057,173 +1286,214 @@ export default function PdvPage() {
         )}
 
         {modo === 'retirar' && etapa === 'retirar_senha' && (
-          <div className="mx-auto px-4 py-10">
-            <div className="flex items-center gap-3 mb-6">
-              <button
-                type="button"
-                onClick={() => reiniciar()}
-                className="w-12 h-12 rounded-2xl bg-white/10 hover:bg-white/15 active:bg-white/20"
-              >
-                <ArrowLeft className="w-5 h-5 mx-auto text-white" />
-              </button>
-              <div>
-                <div className="text-sm text-emerald-300/90 font-bold">Retirada</div>
-                <div className="text-2xl font-extrabold text-white">Digite a senha</div>
-              </div>
+          <div className="flex flex-col lg:flex-row gap-12">
 
+            {/* Left side: Title */}
+            <div className="flex-1 flex items-center justify-center lg:justify-start min-h-[140px]">
+              <div className="text-center lg:text-left">
+                <h2 className={`text-[1.4rem] sm:text-[1.7rem] lg:text-[2rem] font-bold whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>Digite a Senha <br className="hidden lg:block" /> de retirada</h2>
+                <p className={`text-[1.4rem] sm:text-[1.7rem] lg:text-[2rem] font-bold whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>ou escaneie <br className="hidden lg:block" /> o QR Code</p>
+                <button
+                  onClick={() => setModalScannerAberto(true)}
+                  disabled={retiradaProcessando}
+                  className={`mt-4 px-6 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 shadow-sm'} disabled:opacity-50`}
+                >
+                  <QrCode className="w-5 h-5" />
+                  Escanear QR Code
+                </button>
+              </div>
+            </div>
+
+            {/* Right side: Number panel */}
+            <div className="flex-1 space-y-5">
+
+            {/* Display da senha */}
+            <div className={`rounded-2xl border p-4 sm:p-5 text-center transition-all shadow-md ${
+              senhaRetirada ? 'border-blue-400 bg-blue-50 shadow-blue-500/20' : 'border-gray-200 bg-gray-50 shadow-gray-300/30'
+            }`}>
+              <div className={`text-4xl sm:text-5xl font-bold min-h-[50px] leading-none ${
+                senhaRetirada ? 'text-gray-900' : 'text-gray-300'
+              }`}>
+                {senhaRetirada || '——'}
+              </div>
+              {retiradaMensagem && (
+                <div className="mt-2 text-sm font-semibold text-rose-500">{retiradaMensagem}</div>
+              )}
+            </div>
+
+            {/* Teclado numérico */}
+            <div className="grid grid-cols-3 gap-3">
+              {['1','2','3','4','5','6','7','8','9'].map(n => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => handleNumpadRetirada(n)}
+                  disabled={retiradaProcessando}
+                  className="h-14 rounded-xl bg-white border border-gray-200 text-xl font-bold text-gray-800 shadow-sm hover:shadow-md hover:border-gray-300 active:scale-95 active:bg-gray-50 transition-all duration-150 select-none disabled:opacity-50"
+                >
+                  {n}
+                </button>
+              ))}
               <button
                 type="button"
-                onClick={() => reiniciar()}
-                className="ml-auto p-2.5 rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10 active:bg-white/15 transition-colors"
-                aria-label="Sair"
-                title="Sair"
+                onClick={() => handleNumpadRetirada('0')}
+                disabled={retiradaProcessando}
+                className="h-14 rounded-xl bg-white border border-gray-200 text-xl font-bold text-gray-800 shadow-sm hover:shadow-md hover:border-gray-300 active:scale-95 active:bg-gray-50 transition-all duration-150 select-none disabled:opacity-50"
               >
-                <X className="w-6 h-6" />
+                0
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalScannerAberto(true)}
+                disabled={retiradaProcessando}
+                className="h-14 rounded-xl bg-white border border-gray-200 text-gray-600 text-sm font-semibold shadow-sm hover:bg-gray-50 hover:border-gray-300 active:scale-95 transition-all duration-150 select-none disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <QrCode className="w-4 h-4" />QR
+              </button>
+              <button
+                type="button"
+                onClick={handleBackspaceRetirada}
+                disabled={retiradaProcessando}
+                className="h-14 rounded-xl bg-white border border-gray-200 flex items-center justify-center shadow-sm hover:shadow-md hover:border-gray-300 active:scale-95 active:bg-gray-50 transition-all duration-150 select-none disabled:opacity-50"
+              >
+                <Delete className="w-5 h-5 text-gray-500" />
               </button>
             </div>
 
-            <div className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-white/[0.08] via-white/[0.05] to-emerald-500/[0.08] p-5 shadow-[0_18px_60px_rgba(16,185,129,0.12)]">
-              <div className="space-y-5">
-                <div>
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-                    <div className="text-white font-extrabold">Senha</div>
-                  </div>
-
-                  <input
-                    ref={senhaRetiradaInputRef}
-                    value={senhaRetirada}
-                    readOnly
-                    inputMode="none"
-                    onFocus={(e) => e.currentTarget.blur()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') validarERetirar()
-                    }}
-                    autoFocus
-                    placeholder="Digite a senha"
-                    className="w-full h-12 rounded-2xl bg-black/30 border border-emerald-500/20 px-4 text-lg font-mono tracking-[0.35em] text-white placeholder:text-white/35 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  />
-
-                  {retiradaMensagem && (
-                    <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4 text-white/80">
-                      {retiradaMensagem}
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-white/10 pt-5">
-                  <div className="grid grid-cols-3 gap-3">
-                    {['1','2','3','4','5','6','7','8','9'].map(n => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => handleNumpadRetirada(n)}
-                        disabled={retiradaProcessando}
-                        className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <span className="text-white">{n}</span>
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={handleLimparRetirada}
-                      disabled={retiradaProcessando}
-                      className="h-16 rounded-2xl bg-rose-500/20 text-rose-300 text-sm font-bold hover:bg-rose-500/30 active:bg-rose-500/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Limpar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleNumpadRetirada('0')}
-                      disabled={retiradaProcessando}
-                      className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <span className="text-white">0</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleBackspaceRetirada}
-                      disabled={retiradaProcessando}
-                      className="h-16 rounded-2xl bg-white/10 text-white flex items-center justify-center hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Delete className="w-6 h-6 text-white" />
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => validarERetirar()}
-                    disabled={retiradaProcessando}
-                    className="mt-5 w-full h-16 rounded-3xl font-extrabold flex items-center justify-center gap-2 transition-all text-xl disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-xl hover:from-emerald-700 hover:to-green-700"
-                  >
-                    Continuar
-                    <ArrowRight className="w-6 h-6" />
-                  </button>
-                </div>
-              </div>
+            {/* Botões de ação */}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={reiniciar}
+                className="h-12 px-5 rounded-xl bg-white border border-gray-200 font-semibold text-sm text-gray-600 shadow-sm hover:bg-gray-50 hover:border-gray-300 active:scale-95 transition-all duration-150 select-none"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!senhaRetirada) {
+                    setRetiradaMensagem('Digite a senha para continuar')
+                    setTimeout(() => setRetiradaMensagem(''), 2000)
+                  } else {
+                    validarERetirar()
+                  }
+                }}
+                disabled={retiradaProcessando}
+                className={`flex-1 h-12 rounded-xl font-bold flex items-center justify-center gap-2 transition-all duration-150 text-base select-none ${
+                  senhaRetirada && !retiradaProcessando
+                    ? 'bg-blue-600 text-white shadow-md hover:bg-blue-700 active:scale-95'
+                    : 'bg-white border border-gray-200 text-gray-400 shadow-sm cursor-not-allowed'
+                }`}
+              >
+                {retiradaProcessando
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Processando...</>
+                  : <>Continuar <ArrowRight className="w-4 h-4" /></>
+                }
+              </button>
+            </div>
             </div>
           </div>
         )}
 
         {modo === 'retirar' && etapa === 'retirar_abrindo' && (
           <div className="max-w-3xl mx-auto px-4 py-16">
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-center">
-              <Loader2 className="w-10 h-10 animate-spin mx-auto text-white/80" />
-              <div className="mt-4 text-2xl font-extrabold text-white">Processando retirada</div>
-              <div className="mt-2 text-white/70">{retiradaMensagem || 'Aguarde...'}</div>
+            <div className={`rounded-3xl border p-8 text-center ${
+              temaEscuro 
+                ? 'border-white/10 bg-white/5'
+                : 'border-gray-200 bg-gray-50'
+            }`}>
+              <Loader2 className={`w-10 h-10 animate-spin mx-auto ${
+                temaEscuro ? 'text-white/80' : 'text-gray-600'
+              }`} />
+              <div className={`mt-4 text-2xl font-extrabold ${
+                temaEscuro ? 'text-white' : 'text-gray-900'
+              }`}>Processando retirada</div>
+              <div className={`mt-2 ${
+                temaEscuro ? 'text-white/70' : 'text-gray-600'
+              }`}>{retiradaMensagem || 'Aguarde...'}</div>
             </div>
           </div>
         )}
 
         {modo === 'retirar' && etapa === 'retirar_sucesso' && (
-          <div className="max-w-3xl mx-auto px-4 py-16">
-            <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/10 p-8 text-center">
-              <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-200" />
-              <div className="mt-4 text-2xl font-extrabold">Retirada liberada</div>
-              <div className="mt-2 text-white/80">{retiradaMensagem}</div>
-              {retiradaPortaInfo && (
-                <div className="mt-4 text-white/70">
-                  Compartimento: <span className="font-extrabold text-white">{retiradaPortaInfo.numero_porta}</span>
+          <div className="flex flex-col items-center text-center gap-8 py-8 px-2">
+
+            {/* Badge da porta */}
+            {retiradaPortaInfo && (
+              <div className="relative flex items-center justify-center" style={{ width: 160, height: 160 }}>
+                <div className="absolute inset-0 rounded-full bg-blue-400/15 animate-ping" style={{ animationDuration: '2.2s' }} />
+                <div className="absolute w-32 h-32 rounded-full bg-blue-400/20 animate-ping" style={{ animationDuration: '2.2s', animationDelay: '0.6s' }} />
+                <div className="relative w-28 h-28 rounded-3xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center shadow-2xl shadow-blue-400/50">
+                  <span className="text-6xl font-black text-white leading-none">
+                    {retiradaPortaInfo.numero_porta}
+                  </span>
                 </div>
-              )}
-              <div className="mt-6">
-                <button
-                  type="button"
-                  onClick={() => reiniciar()}
-                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15"
-                >
-                  Nova operação
-                </button>
               </div>
+            )}
+
+            {/* Título + instrução */}
+            <div className="space-y-3">
+              <div className="text-4xl font-black text-gray-900 leading-tight">
+                Compartimento{retiradaPortaInfo ? <> <span className="text-blue-500">{retiradaPortaInfo.numero_porta}</span></> : ''} aberto!
+              </div>
+              <div className="text-lg text-gray-400 font-medium">
+                Retire a encomenda e feche a porta
+              </div>
+              {retiradaPortaInfo?.bloco && (
+                <span className="inline-block bg-white/70 backdrop-blur rounded-full px-5 py-2 text-sm font-bold text-blue-700 tracking-widest uppercase shadow-sm">
+                  Bloco {retiradaPortaInfo.bloco} &nbsp;·&nbsp; Apto {retiradaPortaInfo.apartamento}
+                </span>
+              )}
             </div>
+
+            {/* Botão */}
+            <div className="w-full pt-2">
+              <button
+                type="button"
+                onClick={() => reiniciar()}
+                className="w-full h-16 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-bold text-lg shadow-lg shadow-blue-500/25 hover:from-blue-600 hover:to-indigo-600 active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <Package className="w-5 h-5" />
+                Nova operação
+              </button>
+            </div>
+
           </div>
         )}
 
         {modo === 'retirar' && etapa === 'retirar_erro' && (
-          <div className="max-w-3xl mx-auto px-4 py-16">
-            <div className="rounded-3xl border border-rose-500/20 bg-white/5 p-8 text-center backdrop-blur">
-              <XCircle className="w-10 h-10 mx-auto text-rose-200" />
-              <div className="mt-4 text-2xl font-extrabold text-white">Não foi possível liberar</div>
-              <div className="mt-2 text-white/80">{retiradaMensagem || 'Tente novamente.'}</div>
-              <div className="mt-6 flex gap-3 justify-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEtapa('retirar_senha')
-                    setRetiradaMensagem('')
-                  }}
-                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-semibold"
-                >
-                  Tentar novamente
-                </button>
-                <button
-                  type="button"
-                  onClick={() => reiniciar()}
-                  className="h-12 px-6 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-semibold"
-                >
-                  Voltar
-                </button>
-              </div>
+          <div className="flex flex-col items-center text-center gap-6 py-8 px-2">
+
+            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-rose-400 to-red-500 flex items-center justify-center shadow-xl shadow-rose-400/30">
+              <XCircle className="w-10 h-10 text-white" />
             </div>
+
+            <div className="space-y-2">
+              <div className="text-3xl font-black text-gray-900">Não foi possível liberar</div>
+              <div className="text-base text-gray-500">{retiradaMensagem || 'Verifique a senha e tente novamente.'}</div>
+            </div>
+
+            <div className="w-full space-y-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEtapa('retirar_senha')
+                  setRetiradaMensagem('')
+                }}
+                className="w-full h-16 rounded-2xl bg-blue-500 text-white font-bold text-lg shadow-lg shadow-blue-500/25 hover:bg-blue-600 active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                Tentar novamente
+              </button>
+              <button
+                type="button"
+                onClick={() => reiniciar()}
+                className="w-full h-12 rounded-2xl bg-white border border-gray-200 text-gray-600 font-semibold text-base hover:bg-gray-50 active:scale-95 transition-all"
+              >
+                Cancelar
+              </button>
+            </div>
+
           </div>
         )}
 
@@ -1231,206 +1501,156 @@ export default function PdvPage() {
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
             <button
               type="button"
-              onClick={() => setModalScannerAberto(false)}
-              className="absolute inset-0 bg-black/60"
+              onClick={() => {
+                setModalScannerAberto(false)
+                pararScanner()
+              }}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
             />
-            <div className="relative w-full sm:max-w-lg bg-slate-950/90 border border-white/10 rounded-t-3xl sm:rounded-3xl p-6 backdrop-blur">
+            <div className="relative w-full sm:max-w-lg bg-white border border-gray-200 rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl">
+
+              {/* Header do modal */}
               <div className="flex items-center justify-between mb-4">
-                <div className="text-white font-extrabold">Leitor de QRCode</div>
+                <div className="flex items-center gap-2">
+                  <QrCode className="w-5 h-5 text-blue-500" />
+                  <span className="font-extrabold text-gray-900">Escanear QR Code</span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setModalScannerAberto(false)}
-                  className="w-10 h-10 rounded-2xl bg-white/10 text-white/70 hover:bg-white/15"
+                  onClick={() => {
+                    setModalScannerAberto(false)
+                    pararScanner()
+                  }}
+                  className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-all"
                 >
-                  <XCircle className="w-5 h-5 mx-auto" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
+              {/* Seletor de câmera */}
               {camerasDisponiveis.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-[10px] font-bold text-white/40 uppercase tracking-wider mb-2">Câmera</div>
+                <div className="mb-3">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Câmera</div>
                   <select
                     value={cameraSelecionadaId}
                     onChange={(e) => {
                       const id = e.target.value
                       setCameraSelecionadaId(id)
-                      setTimeout(() => {
-                        iniciarScanner(id)
-                      }, 50)
+                      pararScanner()
+                      setTimeout(() => { iniciarScanner(id) }, 50)
                     }}
-                    className="w-full h-12 rounded-2xl bg-black/30 border border-white/10 px-3 text-white"
+                    className="w-full h-11 rounded-xl border border-gray-200 bg-white px-3 text-gray-900 text-sm"
                   >
                     {camerasDisponiveis.map(c => (
-                      <option key={c.deviceId} value={c.deviceId}>
-                        {c.label}
-                      </option>
+                      <option key={c.deviceId} value={c.deviceId}>{c.label}</option>
                     ))}
                   </select>
                 </div>
               )}
 
-              <div className="rounded-2xl overflow-hidden border border-white/10 bg-black/40">
+              {/* Viewfinder da câmera */}
+              <div className="relative rounded-2xl overflow-hidden border-2 border-blue-200 bg-gray-900">
                 <video ref={videoRef} className="w-full h-64 sm:h-72 object-cover" muted playsInline />
+                {/* Blur nas bordas */}
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/40" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-black/40 via-transparent to-black/40" />
+                </div>
+                {/* Guia de scan */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-44 h-44 border-2 border-white/60 rounded-2xl relative">
+                    <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-blue-400 rounded-tl-lg" />
+                    <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-blue-400 rounded-tr-lg" />
+                    <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-blue-400 rounded-bl-lg" />
+                    <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-blue-400 rounded-br-lg" />
+                    {/* Linha de scan animada */}
+                    <div className="absolute top-0 left-0 right-0 h-0.5 bg-green-400 shadow-[0_0_10px_rgba(74,222,128,0.8)] animate-[scan_2s_ease-in-out_infinite]" />
+                  </div>
+                </div>
+                {/* Indicador de scanning */}
+                <div className="absolute bottom-3 left-0 right-0 flex items-center justify-center">
+                  <div className="bg-black/60 backdrop-blur-sm rounded-full px-4 py-2 flex items-center gap-2">
+                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                    <span className="text-white text-xs font-semibold">Pronto para escanear</span>
+                  </div>
+                </div>
               </div>
-              <div className="mt-4 text-white/70">Aponte a câmera para o QRCode do morador.</div>
 
-              <div className="mt-5 flex gap-3">
-                <button
-                  type="button"
-                  onClick={irParaDigitacaoSenha}
-                  className="flex-1 h-12 rounded-2xl bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25"
-                >
-                  Digitar senha
-                </button>
-                <button
-                  type="button"
-                  onClick={() => iniciarScanner(cameraSelecionadaId)}
-                  className="flex-1 h-12 rounded-2xl bg-white/10 hover:bg-white/15"
-                >
-                  Reiniciar câmera
-                </button>
-              </div>
+              <p className="mt-3 text-sm text-gray-500 text-center">Aponte a câmera para o QR Code do comprovante</p>
             </div>
           </div>
         )}
 
         {etapa === 'bloco_apto' && (
-          <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center gap-3">
-              <button onClick={voltar} className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-white hover:bg-white/15 transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div>
-                <div className="text-xs font-bold tracking-[0.2em] text-emerald-400 uppercase">Entregar</div>
-                <div className="text-xl sm:text-2xl font-extrabold text-white">Informe o destino</div>
-              </div>
+          <div key={animacaoKey} className="flex flex-col lg:flex-row gap-12 animate-slide-in-right">
+            {/* Left side: Title */}
+            <div className="flex-1 flex items-center justify-center lg:justify-start min-h-[140px]">
+              <h2 className={`text-[1.6rem] sm:text-[1.9rem] lg:text-[2.3rem] font-bold text-center lg:text-left whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>Qual bloco <br className="hidden lg:block" /> deseja depositar <br className="hidden lg:block" /> a encomenda?</h2>
             </div>
-
-            {/* Campos Bloco e Apartamento */}
-            <div className="grid grid-cols-2 gap-4">
-              {/* Bloco */}
-              <button
-                onClick={() => setCampoAtivo('bloco')}
-                className={`rounded-3xl border-2 p-6 text-left transition-all ${
-                  campoAtivo === 'bloco'
-                    ? 'border-emerald-400 bg-emerald-500/10'
-                    : blocoValido
-                      ? 'border-emerald-500/30 bg-emerald-500/5'
-                      : 'border-white/10 bg-white/5'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <Building2 className={`w-5 h-5 ${campoAtivo === 'bloco' ? 'text-emerald-400' : blocoValido ? 'text-emerald-500' : 'text-white/40'}`} />
-                  <span className={`text-xs font-bold tracking-wider uppercase ${campoAtivo === 'bloco' ? 'text-emerald-400' : blocoValido ? 'text-emerald-500' : 'text-white/40'}`}>Bloco</span>
-                  {blocoValido && <CheckCircle2 className="w-4 h-4 text-emerald-400 ml-auto" />}
-                </div>
-                <div className={`text-3xl sm:text-4xl font-black min-h-[48px] ${
-                  blocoDigitado ? 'text-white' : 'text-white/20'
-                }`}>
-                  {blocoDigitado || '—'}
-                </div>
-                {blocoDigitado && !blocoValido && (
-                  <div className="text-xs font-semibold text-rose-400 mt-2">Bloco não encontrado</div>
-                )}
-              </button>
-
-              {/* Apartamento */}
-              <button
-                onClick={() => setCampoAtivo('apto')}
-                className={`rounded-3xl border-2 p-6 text-left transition-all ${
-                  campoAtivo === 'apto'
-                    ? 'border-emerald-400 bg-emerald-500/10'
-                    : aptoValido
-                      ? 'border-emerald-500/30 bg-emerald-500/5'
-                      : 'border-white/10 bg-white/5'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <Home className={`w-5 h-5 ${campoAtivo === 'apto' ? 'text-emerald-400' : aptoValido ? 'text-emerald-500' : 'text-white/40'}`} />
-                  <span className={`text-xs font-bold tracking-wider uppercase ${campoAtivo === 'apto' ? 'text-emerald-400' : aptoValido ? 'text-emerald-500' : 'text-white/40'}`}>Apto</span>
-                  {aptoValido && <CheckCircle2 className="w-4 h-4 text-emerald-400 ml-auto" />}
-                </div>
-                <div className="flex items-end justify-between gap-3">
-                  <div className={`text-3xl sm:text-4xl font-black min-h-[48px] ${
-                    aptoDigitado ? 'text-white' : 'text-white/20'
-                  }`}>
-                    {aptoDigitado || '—'}
-                  </div>
-                  {aptoDigitado && !aptoValido && blocoValido && (
-                    <div className="text-xs font-semibold text-rose-400 whitespace-nowrap">Apto não encontrado</div>
+            {/* Right side: Number panel */}
+            <div className="flex-1 space-y-5">
+              <div className={`rounded-2xl border p-4 sm:p-5 text-center transition-all ${blocoValido ? (temaEscuro ? 'border-emerald-400 bg-emerald-500/10' : 'border-emerald-500 bg-emerald-50') : blocoDigitado.length >= 2 && !blocoValido ? (temaEscuro ? 'border-rose-400 bg-rose-500/10' : 'border-rose-500 bg-rose-50') : temaEscuro ? 'border-[#1976FF] bg-white/5' : 'border-[#1976FF] bg-white shadow-sm'} ${blocoValido ? (temaEscuro ? 'shadow-md shadow-emerald-400/20' : 'shadow-md shadow-emerald-500/20') : blocoDigitado.length >= 2 && !blocoValido ? (temaEscuro ? 'shadow-md shadow-rose-400/20' : 'shadow-md shadow-rose-500/20') : ''}`}>
+                <div className="relative">
+                  <div className={`text-4xl sm:text-5xl font-black min-h-[50px] leading-none ${blocoDigitado ? (temaEscuro ? 'text-white' : 'text-gray-900') : 'text-gray-400'}`}>{blocoDigitado || '—'}</div>
+                  {blocoValido && (
+                    <div className={`absolute -top-2 -right-2 w-7 h-7 rounded-full flex items-center justify-center shadow-lg ${temaEscuro ? 'bg-emerald-400' : 'bg-emerald-500'}`}>
+                      <Check className="w-4 h-4 text-white" />
+                    </div>
+                  )}
+                  {blocoDigitado.length >= 2 && !blocoValido && (
+                    <div className={`absolute -top-2 -right-2 w-7 h-7 rounded-full flex items-center justify-center shadow-lg ${temaEscuro ? 'bg-rose-400' : 'bg-rose-500'}`}>
+                      <X className="w-4 h-4 text-white" />
+                    </div>
                   )}
                 </div>
-              </button>
+                {blocoDigitado.length >= 2 && !blocoValido && <div className="text-sm font-semibold text-rose-500 mt-2">Bloco não encontrado</div>}
+              </div>
+              {blocosEhLetras && <div className="flex flex-wrap gap-3 justify-center">{blocosUnicos.map(b => <button key={b} onClick={() => { setBlocoDigitado(b); setEtapa('apto') }} className={`h-14 px-5 sm:px-6 rounded-2xl font-extrabold text-xl transition-all active:scale-95 ${blocoDigitado === b ? 'bg-[#1976FF] text-white shadow-lg' : temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border-2 border-gray-300 shadow-md hover:border-[#1976FF]'}`}>{b}</button>)}</div>}
+              {!blocosEhLetras && <div className="grid grid-cols-3 gap-3">{['1','2','3','4','5','6','7','8','9'].map(n => <button key={n} onClick={() => { const next = blocoDigitado + n; setBlocoDigitado(next) }} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#1976FF]'}`}>{n}</button>)}<button onClick={voltar} className="h-14 rounded-xl text-sm font-semibold text-gray-600 bg-white border border-gray-200 active:scale-95 transition-all shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2"><ArrowLeft className="w-4 h-4" />Voltar</button><button onClick={() => { const next = blocoDigitado + '0'; setBlocoDigitado(next) }} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#1976FF]'}`}>0</button><button onClick={() => setBlocoDigitado(p => p.slice(0, -1))} className={`h-14 rounded-xl flex items-center justify-center shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 border border-white/20 hover:bg-white/20' : 'bg-white border border-gray-300 shadow-md hover:border-[#1976FF]'}`}><Delete className={`w-5 h-5 ${temaEscuro ? 'text-white' : 'text-gray-500'}`} /></button></div>}
+              <div className="flex gap-3">
+                <button onClick={reiniciar} className={`h-12 px-5 rounded-xl font-semibold text-sm shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>Cancelar</button>
+                <button onClick={() => { if (blocoValido) { setEtapa('apto'); setAnimacaoKey(prev => prev + 1); } }} disabled={!blocoValido} className={`flex-1 h-12 rounded-xl font-bold flex items-center justify-center gap-2 text-base active:scale-95 transition-all disabled:cursor-not-allowed ${blocoValido ? 'bg-[#1976FF] text-white shadow-md hover:bg-blue-700' : temaEscuro ? 'bg-white/10 text-white' : 'bg-white text-gray-600 border border-gray-300'}`}>Próximo <ArrowRight className="w-4 h-4" /></button>
+              </div>
             </div>
+          </div>
+        )}
 
-            {/* Seleção de bloco por letras (quando condomínio usa letras) */}
-            {blocosEhLetras && campoAtivo === 'bloco' && (
+        {/* ========== ETAPA: APARTAMENTO ========== */}
+        {etapa === 'apto' && (
+          <div key={animacaoKey} className="flex flex-col lg:flex-row gap-12 animate-slide-in-right">
+            {/* Left side: Title */}
+            <div className="flex-1 flex items-center justify-center lg:justify-start min-h-[140px]">
               <div>
-                <div className="text-[10px] font-bold text-white/30 uppercase tracking-wider mb-2">Selecione o bloco</div>
-                <div className="flex flex-wrap gap-2">
-                  {blocosUnicos.map(b => (
-                    <button
-                      key={b}
-                      onClick={() => {
-                        setBlocoDigitado(b)
-                        setCampoAtivo('apto')
-                      }}
-                      className={`h-12 min-w-[48px] px-4 rounded-xl font-extrabold text-lg transition-all ${
-                        blocoDigitado === b
-                          ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30'
-                          : 'bg-white/10 text-white hover:bg-white/20 active:bg-white/30'
-                      }`}
-                    >
-                      {b}
-                    </button>
-                  ))}
+                <div className={`text-sm font-bold tracking-widest uppercase mb-0.5 ${temaEscuro ? 'text-blue-400' : 'text-blue-600'}`}>
+                  Bloco {blocoNormalizado || blocoDigitado}
                 </div>
+                <h2 className={`text-[1.6rem] sm:text-[1.9rem] lg:text-[2.3rem] font-bold text-center lg:text-left whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>Qual apartamento <br className="hidden lg:block" /> deseja depositar <br className="hidden lg:block" /> a encomenda?</h2>
               </div>
-            )}
-
-            {/* Teclado numérico (para bloco numérico ou sempre para apto) */}
-            {(!blocosEhLetras || campoAtivo === 'apto') && (
-              <div className="grid grid-cols-3 gap-3">
-                {['1','2','3','4','5','6','7','8','9'].map(num => (
-                  <button
-                    key={num}
-                    onClick={() => handleNumpad(num)}
-                    className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors"
-                  >
-                    {num}
-                  </button>
-                ))}
-                <button
-                  onClick={handleLimpar}
-                  className="h-16 rounded-2xl bg-rose-500/20 text-rose-300 text-sm font-bold hover:bg-rose-500/30 active:bg-rose-500/40 transition-colors"
-                >
-                  Limpar
-                </button>
-                <button
-                  onClick={() => handleNumpad('0')}
-                  className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-black hover:bg-white/20 active:bg-white/30 transition-colors"
-                >
-                  0
-                </button>
-                <button
-                  onClick={handleBackspace}
-                  className="h-16 rounded-2xl bg-white/10 text-white flex items-center justify-center hover:bg-white/20 active:bg-white/30 transition-colors"
-                >
-                  <Delete className="w-6 h-6" />
-                </button>
+            </div>
+            {/* Right side: Number panel */}
+            <div className="flex-1 space-y-5">
+            <div className={`rounded-2xl border p-4 sm:p-5 text-center transition-all ${aptoValido ? (temaEscuro ? 'border-emerald-400 bg-emerald-500/10' : 'border-emerald-500 bg-emerald-50') : aptoDigitado.length >= 3 && !aptoValido ? (temaEscuro ? 'border-rose-400 bg-rose-500/10' : 'border-rose-500 bg-rose-50') : temaEscuro ? 'border-[#20D3C2] bg-white/5' : 'border-[#20D3C2] bg-white shadow-sm'} ${aptoValido ? (temaEscuro ? 'shadow-md shadow-emerald-400/20' : 'shadow-md shadow-emerald-500/20') : aptoDigitado.length >= 3 && !aptoValido ? (temaEscuro ? 'shadow-md shadow-rose-400/20' : 'shadow-md shadow-rose-500/20') : ''}`}>
+              <div className="relative">
+                <div className={`text-4xl sm:text-5xl font-black min-h-[50px] leading-none ${aptoDigitado ? (temaEscuro ? 'text-white' : 'text-gray-900') : 'text-gray-400'}`}>{aptoDigitado || '—'}</div>
+                {aptoValido && (
+                  <div className={`absolute -top-2 -right-2 w-7 h-7 rounded-full flex items-center justify-center shadow-lg ${temaEscuro ? 'bg-emerald-400' : 'bg-emerald-500'}`}>
+                    <Check className="w-4 h-4 text-white" />
+                  </div>
+                )}
+                {aptoDigitado.length >= 3 && !aptoValido && (
+                  <div className={`absolute -top-2 -right-2 w-7 h-7 rounded-full flex items-center justify-center shadow-lg ${temaEscuro ? 'bg-rose-400' : 'bg-rose-500'}`}>
+                    <X className="w-4 h-4 text-white" />
+                  </div>
+                )}
               </div>
-            )}
-
-            {/* Botão avançar */}
-            <button
-              onClick={avancarParaTamanho}
-              disabled={!blocoValido || !aptoValido}
-              className="w-full h-16 rounded-3xl font-extrabold flex items-center justify-center gap-2 transition-all text-xl disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-xl hover:from-emerald-700 hover:to-green-700"
-            >
-              Continuar
-              <ArrowRight className="w-6 h-6" />
-            </button>
+              {aptoDigitado.length >= 3 && !aptoValido && <div className="text-sm font-semibold text-rose-500 mt-2">Apartamento não encontrado</div>}
+            </div>
+            <div className="grid grid-cols-3 gap-3">{['1','2','3','4','5','6','7','8','9'].map(n => <button key={n} onClick={() => setAptoDigitado(p => p + n)} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#20D3C2]'}`}>{n}</button>)}<button onClick={voltar} className="h-14 rounded-xl text-sm font-semibold text-gray-600 bg-white border border-gray-200 active:scale-95 transition-all shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2"><ArrowLeft className="w-4 h-4" />Voltar</button><button onClick={() => setAptoDigitado(p => p + '0')} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#20D3C2]'}`}>0</button><button onClick={() => setAptoDigitado(p => p.slice(0, -1))} className={`h-14 rounded-xl flex items-center justify-center shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 border border-white/20 hover:bg-white/20' : 'bg-white border border-gray-300 shadow-md hover:border-[#20D3C2]'}`}><Delete className={`w-5 h-5 ${temaEscuro ? 'text-white' : 'text-gray-500'}`} /></button></div>
+            <div className="flex gap-3">
+              <button onClick={reiniciar} className={`h-12 px-5 rounded-xl font-semibold text-sm shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>Cancelar</button>
+              <button onClick={() => aptoValido && avancarParaTamanho()} disabled={!aptoValido} className={`flex-1 h-12 rounded-xl font-bold flex items-center justify-center gap-2 text-base active:scale-95 transition-all disabled:cursor-not-allowed ${aptoValido ? 'bg-emerald-600 text-white shadow-md hover:bg-emerald-700' : temaEscuro ? 'bg-white/10 text-white' : 'bg-white text-gray-600 border border-gray-300'}`}>Próximo <ArrowRight className="w-4 h-4" /></button>
+            </div>
+            </div>
           </div>
         )}
 
@@ -1446,15 +1666,23 @@ export default function PdvPage() {
           const maxH = 220
 
           return (
-          <div className="space-y-6">
+          <div key={animacaoKey} className="space-y-6 animate-slide-in-right">
             {/* Header */}
             <div className="flex items-center gap-3">
-              <button onClick={voltar} className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-white hover:bg-white/15 transition-colors">
+              <button onClick={voltar} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors ${
+                temaEscuro 
+                  ? 'bg-white/10 text-white hover:bg-white/15'
+                  : 'bg-gray-200 text-gray-900 hover:bg-gray-300'
+              }`}>
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <div>
-                <div className="text-xs font-bold tracking-[0.2em] text-emerald-400 uppercase">Bloco {blocoNormalizado || blocoDigitado} • Apto {aptoDigitado}</div>
-                <div className="text-xl sm:text-2xl font-extrabold text-white">Escolha o compartimento</div>
+              <div className="min-w-0 flex-1">
+                <div className={`text-xs font-bold tracking-[0.2em] uppercase truncate ${
+                  temaEscuro ? 'text-[#1976FF]' : 'text-emerald-600'
+                }`}>Bloco {blocoNormalizado || blocoDigitado} • Apto {aptoDigitado}</div>
+                <div className={`text-xl sm:text-2xl font-extrabold truncate ${
+                  temaEscuro ? 'text-white' : 'text-gray-900'
+                }`}>Escolha o compartimento</div>
               </div>
             </div>
 
@@ -1552,12 +1780,25 @@ export default function PdvPage() {
                   return (
                     <div key={tam} className="flex-1 text-center">
                       <div className={`text-xs font-extrabold transition-all ${
-                        selecionado ? 'text-white' : indisponivel ? 'text-white/20' : 'text-white/60'
+                        selecionado 
+                          ? temaEscuro ? 'text-white' : 'text-gray-900'
+                          : indisponivel 
+                            ? temaEscuro ? 'text-white/20' : 'text-gray-400'
+                            : temaEscuro ? 'text-white/60' : 'text-gray-600'
                       }`}>{tamanhoLabel[tam]}</div>
                       <div className={`text-[10px] mt-0.5 ${
-                        indisponivel ? 'text-rose-400/60' : selecionado ? 'text-emerald-400' : 'text-white/30'
+                        indisponivel 
+                          ? temaEscuro ? 'text-rose-400/60' : 'text-rose-600/80'
+                          : selecionado 
+                            ? temaEscuro ? 'text-emerald-400' : 'text-emerald-600'
+                            : temaEscuro ? 'text-white/30' : 'text-gray-500'
                       }`}>
                         {indisponivel ? 'Esgotado' : `${qtd} livre${qtd > 1 ? 's' : ''}`}
+                      </div>
+                      <div className={`text-[9px] mt-0.5 leading-tight ${
+                        indisponivel ? 'text-gray-300' : selecionado ? 'text-gray-600' : 'text-gray-400'
+                      }`}>
+                        {tamanhoDesc[tam]}
                       </div>
                     </div>
                   )
@@ -1569,7 +1810,7 @@ export default function PdvPage() {
             <div className="flex gap-3">
               <button
                 onClick={reiniciar}
-                className="h-14 px-5 rounded-2xl font-bold flex items-center justify-center gap-1.5 transition-all text-sm bg-white/10 text-white/60 hover:bg-white/15 hover:text-white/80"
+                className="h-16 px-6 rounded-2xl bg-white border border-gray-200 font-semibold text-sm text-gray-600 shadow-sm hover:bg-gray-50 hover:border-gray-300 active:scale-95 transition-all duration-150 select-none flex items-center justify-center gap-1.5"
               >
                 <XCircle className="w-4 h-4" />
                 Cancelar
@@ -1577,10 +1818,10 @@ export default function PdvPage() {
               <button
                 onClick={confirmarOcupacao}
                 disabled={!tamanhoSelecionado || !portaSelecionada}
-                className={`flex-1 h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all duration-300 text-lg ${
+                className={`flex-1 h-16 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all duration-150 text-lg select-none ${
                   tamanhoSelecionado && portaSelecionada
-                    ? 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700'
-                    : 'bg-white/10 text-white/30 cursor-not-allowed'
+                    ? 'bg-emerald-500 text-white shadow-sm hover:bg-emerald-600 active:scale-95'
+                    : 'bg-white border border-gray-200 text-gray-400 shadow-sm cursor-not-allowed'
                 }`}
               >
                 <Package className="w-5 h-5" />
@@ -1593,8 +1834,9 @@ export default function PdvPage() {
 
         {/* ========== ETAPA: CONFIRMANDO ========== */}
         {etapa === 'confirmando' && (
-          <div className="flex flex-col items-center justify-center py-20 px-6">
-            {/* Animação de pulso com círculos concêntricos */}
+          <div className="flex flex-col items-center justify-center py-16 px-6 gap-10">
+
+            {/* Ícone animado */}
             <div className="relative">
               <div className="absolute inset-0 w-20 h-20 rounded-full bg-emerald-500/20 animate-ping-slow" />
               <div className="absolute inset-0 w-20 h-20 rounded-full bg-emerald-500/30 animate-ping-slow animation-delay-1000" />
@@ -1602,10 +1844,42 @@ export default function PdvPage() {
                 <Sparkles className="w-10 h-10 text-white animate-pulse" />
               </div>
             </div>
-            <div className="mt-12 text-center">
-              <div className="text-3xl sm:text-4xl font-black text-white tracking-tight">Processando entrega</div>
-              <div className="text-base sm:text-lg text-emerald-300/80 mt-6 font-medium">Aguarde um momento</div>
+
+            {/* Texto */}
+            <div className="text-center space-y-2">
+              <div className={`text-3xl font-black tracking-tight ${
+                temaEscuro ? 'text-white' : 'text-gray-900'
+              }`}>Abrindo o compartimento</div>
+              <div className={`text-base font-medium ${
+                temaEscuro ? 'text-white/60' : 'text-gray-400'
+              }`}>Aguarde, estamos reservando o espaço para a encomenda</div>
             </div>
+
+            {/* Etapas visuais */}
+            <div className="w-full space-y-3">
+              {[
+                { label: 'Verificando disponibilidade', done: true },
+                { label: 'Reservando compartimento', done: true },
+                { label: 'Abrindo a porta', done: false },
+              ].map((step, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    step.done
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-emerald-100 border-2 border-emerald-400'
+                  }`}>
+                    {step.done
+                      ? <CheckCircle2 className="w-4 h-4" />
+                      : <Loader2 className="w-3 h-3 text-emerald-500 animate-spin" />
+                    }
+                  </div>
+                  <span className={`text-sm font-medium ${
+                    step.done ? 'text-gray-700' : 'text-emerald-600'
+                  }`}>{step.label}</span>
+                </div>
+              ))}
+            </div>
+
           </div>
         )}
 
@@ -1615,202 +1889,192 @@ export default function PdvPage() {
 
             {/* === FASE 1: Aguardando entregador depositar === */}
             {!fechaduraConfirmada && (
-              <div className="space-y-12">
-                {/* Header padrão como outras etapas */}
-                <div className="flex items-center gap-6">
-                  <button onClick={voltar} className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-white hover:bg-white/15 transition-colors">
-                    <ArrowLeft className="w-5 h-5" />
-                  </button>
-                  <div>
-                    <div className="text-xs font-bold tracking-[0.2em] text-emerald-400 uppercase">Bloco {blocoNormalizado || blocoDigitado} • Apto {aptoDigitado}</div>
-                    <div className="text-xl sm:text-2xl font-extrabold text-white">Deposite a mercadoria</div>
+              <div key={animacaoKey} className="flex flex-col items-center justify-center gap-6 py-8 px-4 animate-slide-in-right min-h-[60vh]">
+                {/* Mensagem principal */}
+                <div className="text-center">
+                  <div className={`text-3xl sm:text-4xl font-black leading-tight whitespace-nowrap ${temaEscuro ? 'text-white' : 'text-gray-900'}`}>
+                    Deposite a Mercadoria na PORTA <span className="text-[#1976FF]">{portaSelecionada?.numero_porta}</span>
                   </div>
                 </div>
 
-                {/* Card principal com destaque máximo */}
-                <div className="rounded-3xl border-2 border-emerald-400/30 bg-gradient-to-br from-emerald-500/10 via-emerald-600/5 to-green-600/10 p-10 sm:p-12 shadow-2xl">
-                  <div className="text-center">
-                    {portaSelecionada && (
-                      <div className="flex flex-col items-center gap-12">
-                        <div className="relative">
-                          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/25">
-                            <div className="text-2xl sm:text-3xl font-black text-white leading-none">
-                              {portaSelecionada.numero_porta}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="space-y-6">
-                          <div className="text-2xl sm:text-3xl font-black text-white text-center leading-tight">
-                            Coloque a mercadoria<br/>no compartimento {portaSelecionada.numero_porta}
-                          </div>
-                          <div className="text-sm text-emerald-300/90 text-center font-medium">
-                            Após depositar, feche a porta para finalizar
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Botões no padrão do app */}
-                <div className="flex gap-6">
+                {/* Botões */}
+                <div className="flex flex-col gap-5 max-w-md mx-auto w-full">
+                  {/* Botão confirmar */}
                   <button
                     type="button"
                     onClick={fecharPortaAgora}
                     disabled={fechandoPortaAgora || !portaSelecionada}
-                    className="relative flex-1 h-16 sm:h-18 rounded-2xl bg-gradient-to-r from-emerald-600 to-green-600 text-white font-extrabold text-xl sm:text-2xl shadow-lg hover:from-emerald-700 hover:to-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 overflow-hidden"
+                    className="relative w-full h-20 rounded-2xl bg-gradient-to-r from-emerald-500 to-green-500 text-white font-extrabold text-lg shadow-xl shadow-emerald-500/30 hover:from-emerald-600 hover:to-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center overflow-hidden"
                   >
                     {!fechandoPortaAgora && (
                       <div
-                        className="absolute inset-y-0 left-0 bg-white/20 transition-all duration-200 ease-linear"
+                        className="absolute inset-y-0 left-0 bg-white/15 transition-all duration-200 ease-linear"
                         style={{ width: `${progressoFechadura}%` }}
                       />
                     )}
-                    {fechandoPortaAgora ? (
-                      <>
-                        <Loader2 className="w-6 h-6 animate-spin" />
-                        <span>Fechando...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Package className="w-6 h-6" />
-                        <span>Fechar porta</span>
-                        <span className="text-base sm:text-lg opacity-80">
-                          ({Math.ceil(TEMPO_FECHADURA - (progressoFechadura / 100) * TEMPO_FECHADURA)}s)
-                        </span>
-                      </>
-                    )}
+                    <div className="relative flex items-center gap-3">
+                      {fechandoPortaAgora ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span>Confirmando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-5 h-5" />
+                          <span>Confirmar depósito</span>
+                        </>
+                      )}
+                    </div>
                   </button>
+
+                  {/* Botão cancelar */}
                   <button
-                    onClick={reiniciar}
-                    className="h-16 sm:h-18 px-6 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all text-base sm:text-lg bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 whitespace-nowrap"
+                    onClick={() => setModalCancelarAberto(true)}
+                    disabled={fechandoPortaAgora}
+                    className={`w-full h-14 rounded-2xl text-sm font-semibold transition-all shadow-md ${fechandoPortaAgora ? 'opacity-50 cursor-not-allowed' : ''} ${temaEscuro ? 'text-gray-400 bg-white/10 border border-white/20 hover:bg-white/20' : 'text-gray-600 bg-white border border-gray-200 hover:bg-gray-50'}`}
                   >
-                    <XCircle className="w-6 h-6" />
                     Cancelar
                   </button>
                 </div>
+
               </div>
             )}
 
             {/* === FASE 2: Fechadura confirmada === */}
             {fechaduraConfirmada && (
-              <div className="space-y-10">
+              <div className="flex flex-col items-center text-center gap-8 py-8 px-2">
+
                 {/* Ícone de sucesso */}
-                <div className="flex justify-center">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-lg shadow-emerald-500/30">
-                    <CheckCircle2 className="w-8 h-8 text-white" />
+                <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-emerald-400 to-green-500 flex items-center justify-center shadow-2xl shadow-emerald-400/40">
+                  <CheckCircle2 className="w-12 h-12 text-white" />
+                </div>
+
+                {/* Título + subtítulo */}
+                <div className="space-y-2">
+                  <div className={`text-4xl font-black leading-tight ${temaEscuro ? 'text-white' : 'text-gray-900'}`}>
+                    Entrega confirmada!
+                  </div>
+                  <div className={`text-base font-medium ${temaEscuro ? 'text-gray-400' : 'text-gray-400'}`}>
+                    Bloco {blocoNormalizado || blocoDigitado} · Apto {aptoDigitado} · Compartimento {portaSelecionada?.numero_porta}
                   </div>
                 </div>
 
-                <div className="text-center space-y-6">
-                  <div className="text-4xl sm:text-5xl font-black text-white tracking-tight">Entrega confirmada!</div>
-                  <div className="text-base sm:text-lg text-emerald-300/70 font-semibold">
-                    Bloco {blocoNormalizado || blocoDigitado} • Apto {aptoDigitado} • Compartimento {portaSelecionada?.numero_porta}
-                  </div>
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
-                  <button
-                    onClick={reiniciar}
-                    disabled={cooldownNovaOperacaoAtivo}
-                    className={`relative h-20 px-12 rounded-2xl font-extrabold flex items-center justify-center gap-3 transition-all text-xl overflow-hidden shadow-xl ${
-                      cooldownNovaOperacaoAtivo
-                        ? 'bg-white/10 text-white/40 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg hover:from-emerald-700 hover:to-green-700'
-                    }`}
-                  >
-                    {cooldownNovaOperacaoAtivo && (
-                      <div
-                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-600/30 to-green-600/30"
-                        style={{ width: `${progressoNovaOperacao}%` }}
-                      />
-                    )}
-                    <div className="relative flex items-center justify-center gap-3">
-                      <Package className="w-6 h-6" />
-                      {cooldownNovaOperacaoAtivo
-                        ? `Nova operação (${Math.ceil(TEMPO_NOVA_OPERACAO - (progressoNovaOperacao / 100) * TEMPO_NOVA_OPERACAO)}s)`
-                        : 'Nova operação'
-                      }
-                    </div>
-                  </button>
-
+                {/* Botões */}
+                <div className="w-full space-y-3 pt-2">
                   <button
                     onClick={() => setModalComprovanteAberto(true)}
-                    className="h-20 px-10 rounded-2xl font-extrabold flex items-center justify-center gap-3 transition-all text-base bg-white/10 text-white/80 hover:bg-white/15 hover:text-white"
+                    className="w-full h-16 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-bold text-lg shadow-lg shadow-blue-500/25 hover:from-blue-600 hover:to-indigo-600 active:scale-95 transition-all flex items-center justify-center gap-3"
                   >
-                    <Phone className="w-6 h-6" />
-                    Comprovante
+                    <Phone className="w-5 h-5" />
+                    Receber comprovante
+                  </button>
+
+                  <button
+                    onClick={reiniciar}
+                    className="w-full h-14 rounded-2xl bg-white border border-gray-200 text-gray-600 font-semibold text-base shadow-sm hover:bg-gray-50 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Package className="w-5 h-5" />
+                    Nova operação
                   </button>
                 </div>
+
+                {/* Contador auto-reiniciar */}
+                <div className="w-full flex flex-col items-center gap-2 px-1">
+                  <div className="w-full flex items-center justify-between text-xs mb-0.5">
+                    <span className="text-gray-400 font-medium">Reinício automático</span>
+                    <span className="text-emerald-600 font-bold tabular-nums">
+                      {Math.ceil(TEMPO_AUTO_REINICIAR - (progressoAutoReiniciar / 100) * TEMPO_AUTO_REINICIAR)}s
+                    </span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-green-500 transition-all duration-200 ease-linear shadow-sm"
+                      style={{ width: `${progressoAutoReiniciar}%` }}
+                    />
+                  </div>
+                </div>
+
               </div>
             )}
 
             {/* Modal comprovante (WhatsApp do entregador) */}
             {modalComprovanteAberto && (
-              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
                 <button
                   type="button"
-                  onClick={() => setModalComprovanteAberto(false)}
+                  onClick={() => {
+                    modalFechadoManualmente.current = true
+                    setModalComprovanteAberto(false)
+                  }}
                   className="absolute inset-0 bg-black/60"
                 />
-                <div className="relative w-full sm:max-w-2xl bg-slate-950/90 border border-white/10 rounded-t-3xl sm:rounded-3xl p-8 sm:p-10 backdrop-blur">
-                  <div className="flex items-center justify-between mb-6">
-                    <div className="text-2xl sm:text-3xl font-black text-white">Comprovante</div>
+                <div className="relative w-full max-w-lg bg-white border border-gray-200 rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-[1.3rem] sm:text-[1.5rem] font-black text-gray-900">
+                      Digite seu WhatsApp
+                    </h2>
                     <button
                       type="button"
-                      onClick={() => setModalComprovanteAberto(false)}
+                      onClick={() => {
+                        modalFechadoManualmente.current = true
+                        setModalComprovanteAberto(false)
+                      }}
                       disabled={comprovanteEnviando}
-                      className="w-12 h-12 rounded-2xl bg-white/10 text-white/70 hover:bg-white/15 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="w-10 h-10 rounded-2xl bg-gray-100 text-gray-500 hover:bg-gray-200 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                     >
-                      <XCircle className="w-6 h-6 mx-auto" />
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
 
-                  <div className="text-white/70 text-base sm:text-lg mb-6">
-                    Digite seu WhatsApp para receber o comprovante da entrega
+                  <div className={`rounded-3xl border-2 p-3 sm:p-4 text-center transition-all mb-4 ${
+                    whatsappEntregador ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-gray-50'
+                  }`}>
+                    <div className={`text-3xl sm:text-4xl font-black min-h-[40px] leading-none ${
+                      whatsappEntregador ? 'text-gray-900' : 'text-gray-300'
+                    }`}>
+                      {formatarWhatsapp(whatsappEntregador) || '(00) 00000-0000'}
+                    </div>
                   </div>
 
-                  <div className="w-full h-16 sm:h-18 rounded-3xl bg-white/10 border-2 border-white/15 flex items-center justify-center text-white font-extrabold text-xl sm:text-2xl mb-6">
-                    {formatarWhatsapp(whatsappEntregador) || '(00) 00000-0000'}
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3 mb-6">
+                  <div className="grid grid-cols-3 gap-2 mb-4">
                     {['1','2','3','4','5','6','7','8','9'].map(num => (
                       <button
                         key={num}
                         onClick={() => comprovanteDigit(num)}
                         disabled={comprovanteEnviando}
-                        className="h-16 sm:h-18 rounded-2xl bg-white/10 text-white text-2xl sm:text-3xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="h-12 rounded-2xl bg-white border border-gray-200 text-gray-800 text-lg font-bold hover:bg-gray-50 hover:border-gray-300 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                       >
                         {num}
                       </button>
                     ))}
                     <button
-                      onClick={comprovanteClear}
+                      onClick={() => {
+                        modalFechadoManualmente.current = true
+                        setModalComprovanteAberto(false)
+                      }}
                       disabled={comprovanteEnviando}
-                      className="h-16 sm:h-18 rounded-2xl bg-white/10 text-white/80 text-sm font-extrabold hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="h-12 rounded-2xl bg-white border border-gray-200 text-gray-600 text-sm font-semibold hover:bg-gray-50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm flex items-center justify-center gap-2"
                     >
-                      Limpar
+                      <ArrowLeft className="w-4 h-4" />Voltar
                     </button>
                     <button
                       onClick={() => comprovanteDigit('0')}
                       disabled={comprovanteEnviando}
-                      className="h-16 sm:h-18 rounded-2xl bg-white/10 text-white text-2xl sm:text-3xl font-black hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="h-12 rounded-2xl bg-white border border-gray-200 text-gray-800 text-lg font-bold hover:bg-gray-50 hover:border-gray-300 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                     >
                       0
                     </button>
                     <button
                       onClick={comprovanteBackspace}
                       disabled={comprovanteEnviando}
-                      className="h-16 sm:h-18 rounded-2xl bg-white/10 text-white flex items-center justify-center hover:bg-white/20 active:bg-white/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="h-12 rounded-2xl bg-white border border-gray-200 text-gray-500 flex items-center justify-center hover:bg-gray-50 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                     >
-                      <Delete className="w-6 h-6" />
+                      <Delete className="w-4 h-4" />
                     </button>
                   </div>
 
                   {comprovanteErro && (
-                    <div className="mb-6 text-sm font-bold text-rose-400/90 bg-rose-500/10 border border-rose-500/20 rounded-2xl px-4 py-3">
+                    <div className="mb-4 text-sm font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-2xl px-3 py-2">
                       {comprovanteErro}
                     </div>
                   )}
@@ -1819,16 +2083,16 @@ export default function PdvPage() {
                     type="button"
                     onClick={enviarComprovante}
                     disabled={whatsappEntregador.replace(/\D/g, '').length < 10 || comprovanteEnviando}
-                    className="w-full h-16 sm:h-18 rounded-3xl font-extrabold flex items-center justify-center gap-3 transition-all text-xl sm:text-2xl disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-xl hover:from-emerald-700 hover:to-green-700"
+                    className="w-full h-11 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all text-sm disabled:opacity-30 disabled:cursor-not-allowed bg-blue-600 text-white shadow-lg hover:bg-blue-700 active:scale-95"
                   >
                     {comprovanteEnviando ? (
                       <>
-                        <Loader2 className="w-6 h-6 animate-spin" />
+                        <Loader2 className="w-4 h-4 animate-spin" />
                         <span>Enviando...</span>
                       </>
                     ) : (
                       <>
-                        <Phone className="w-6 h-6" />
+                        <Send className="w-4 h-4" />
                         <span>Enviar comprovante</span>
                       </>
                     )}
@@ -1836,6 +2100,84 @@ export default function PdvPage() {
                 </div>
               </div>
             )}
+
+            {/* Modal de confirmação de cancelamento */}
+            {modalCancelarAberto && (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+                <button
+                  type="button"
+                  onClick={() => setModalCancelarAberto(false)}
+                  className="absolute inset-0 bg-black/60"
+                />
+                <div className="relative w-full sm:max-w-md bg-white border border-gray-200 rounded-t-3xl sm:rounded-3xl p-8 shadow-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-2xl font-black text-gray-900">Cancelar entrega?</div>
+                    <button
+                      type="button"
+                      onClick={() => setModalCancelarAberto(false)}
+                      className="w-11 h-11 rounded-2xl bg-gray-100 text-gray-500 hover:bg-gray-200 flex items-center justify-center transition-all"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="text-gray-500 text-sm mb-6">
+                    Tem certeza que deseja cancelar esta entrega? A porta será liberada e você precisará começar novamente.
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    <button
+                      onClick={async () => {
+                        if (portaSelecionada && !fechaduraConfirmada) {
+                          try {
+                            await atualizarStatusPorta(portaSelecionada.uid, 'DISPONIVEL')
+                          } catch (err) {
+                            console.warn('[PDV] Falha ao liberar porta no cancelamento:', err)
+                          }
+                        }
+                        setModalCancelarAberto(false)
+                        reiniciar()
+                      }}
+                      className="w-full h-14 rounded-2xl bg-rose-500 text-white font-bold text-lg shadow-lg hover:bg-rose-600 active:scale-95 transition-all"
+                    >
+                      Sim, cancelar
+                    </button>
+                    <button
+                      onClick={() => setModalCancelarAberto(false)}
+                      className="w-full h-14 rounded-2xl bg-gray-100 text-gray-700 font-semibold text-base hover:bg-gray-200 active:scale-95 transition-all"
+                    >
+                      Voltar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========== ETAPA: ERRO DE FECHAMENTO (após porta aberta) ========== */}
+        {etapa === 'erro_fechamento' && (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-amber-500/30 bg-gradient-to-br from-amber-50 to-orange-50 p-8 flex flex-col items-center text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
+                <XCircle className="w-8 h-8 text-white" />
+              </div>
+              <div className="text-xl font-extrabold text-gray-900 mt-4">Não foi possível confirmar o fechamento</div>
+              <div className="text-sm text-gray-500 mt-2 max-w-sm">
+                O sistema não conseguiu verificar se a porta foi fechada corretamente.
+                <br /><br />
+                Verifique se a encomenda está dentro do compartimento e a porta está bem fechada.
+                Se o problema persistir, solicite auxílio ao porteiro.
+              </div>
+            </div>
+
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full h-14 rounded-2xl font-extrabold flex items-center justify-center gap-2 transition-all text-lg bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-500/20"
+            >
+              <Sparkles className="w-5 h-5" />
+              Reiniciar sistema
+            </button>
           </div>
         )}
 
@@ -1859,6 +2201,7 @@ export default function PdvPage() {
           </div>
         )}
 
+      </div>
       </div>
     </div>
   )
