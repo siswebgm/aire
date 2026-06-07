@@ -20,7 +20,9 @@ import {
   Sun,
   Moon,
   Check,
-  Send
+  Send,
+  Maximize,
+  Minimize
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -57,6 +59,8 @@ type Modo = 'entregar' | 'retirar' | null
 export default function PdvPage() {
   // Dark mode automático: horário do dia ou preferência do sistema
   const [temaEscuro, setTemaEscuro] = useState(false)
+  const [telaCheia, setTelaCheia] = useState(false)
+
   useEffect(() => {
     const detectarTema = () => {
       const hora = new Date().getHours()
@@ -73,6 +77,32 @@ export default function PdvPage() {
     return () => {
       mediaQuery.removeEventListener('change', detectarTema)
       clearInterval(interval)
+    }
+  }, [])
+
+  const toggleTelaCheia = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => {
+        setTelaCheia(true)
+      }).catch(err => {
+        console.error('Erro ao entrar em tela cheia:', err)
+      })
+    } else {
+      document.exitFullscreen().then(() => {
+        setTelaCheia(false)
+      }).catch(err => {
+        console.error('Erro ao sair da tela cheia:', err)
+      })
+    }
+  }
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setTelaCheia(!!document.fullscreenElement)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
     }
   }, [])
 
@@ -1141,6 +1171,19 @@ export default function PdvPage() {
           </button>
           <button
             type="button"
+            onClick={toggleTelaCheia}
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border shadow-sm ${
+              temaEscuro
+                ? 'bg-white/10 border-white/20 text-white/90 hover:bg-white/20'
+                : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+            title={telaCheia ? 'Sair da tela cheia' : 'Tela cheia'}
+            aria-label={telaCheia ? 'Sair da tela cheia' : 'Entrar em tela cheia'}
+          >
+            {telaCheia ? <Minimize size={16} /> : <Maximize size={16} />}
+          </button>
+          <button
+            type="button"
             onClick={() => setModalLogoutAberto(true)}
             className={`h-9 px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all border shadow-sm ${
               temaEscuro
@@ -1286,21 +1329,31 @@ export default function PdvPage() {
         )}
 
         {modo === 'retirar' && etapa === 'retirar_senha' && (
-          <div className="flex flex-col lg:flex-row gap-12">
+          <div className="flex flex-col lg:flex-row gap-24">
 
             {/* Left side: Title */}
             <div className="flex-1 flex items-center justify-center lg:justify-start min-h-[140px]">
-              <div className="text-center lg:text-left">
-                <h2 className={`text-[1.4rem] sm:text-[1.7rem] lg:text-[2rem] font-bold whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>Digite a Senha <br className="hidden lg:block" /> de retirada</h2>
-                <p className={`text-[1.4rem] sm:text-[1.7rem] lg:text-[2rem] font-bold whitespace-normal leading-snug ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>ou escaneie <br className="hidden lg:block" /> o QR Code</p>
-                <button
-                  onClick={() => setModalScannerAberto(true)}
-                  disabled={retiradaProcessando}
-                  className={`mt-4 px-6 py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 shadow-sm'} disabled:opacity-50`}
-                >
-                  <QrCode className="w-5 h-5" />
-                  Escanear QR Code
-                </button>
+              <div className="text-center lg:text-left w-full">
+                <div className={`space-y-8 ${temaEscuro ? 'text-white' : 'text-[#1a1a2e]'}`}>
+                  {/* Texto unificado */}
+                  <div className="text-left">
+                    <h3 className={`text-3xl sm:text-4xl font-bold leading-normal whitespace-normal`}>
+                      Digite a senha de retirada<br />ou escaneie o QR Code
+                    </h3>
+                  </div>
+
+                  {/* Botão de scanner */}
+                  <div className="text-left">
+                    <button
+                      onClick={() => setModalScannerAberto(true)}
+                      disabled={retiradaProcessando}
+                      className={`px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${temaEscuro ? 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-md shadow-emerald-500/20' : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-md shadow-emerald-500/20'} disabled:opacity-50`}
+                    >
+                      <Camera className="w-4 h-4" />
+                      Abrir scanner
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1605,7 +1658,7 @@ export default function PdvPage() {
                 </div>
                 {blocoDigitado.length >= 2 && !blocoValido && <div className="text-sm font-semibold text-rose-500 mt-2">Bloco não encontrado</div>}
               </div>
-              {blocosEhLetras && <div className="flex flex-wrap gap-3 justify-center">{blocosUnicos.map(b => <button key={b} onClick={() => { setBlocoDigitado(b); setEtapa('apto') }} className={`h-14 px-5 sm:px-6 rounded-2xl font-extrabold text-xl transition-all active:scale-95 ${blocoDigitado === b ? 'bg-[#1976FF] text-white shadow-lg' : temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border-2 border-gray-300 shadow-md hover:border-[#1976FF]'}`}>{b}</button>)}</div>}
+              {blocosEhLetras && <div className="grid grid-cols-3 gap-3 justify-center">{blocosUnicos.map(b => <button key={b} onClick={() => { setBlocoDigitado(b); setEtapa('apto') }} className={`h-14 px-5 sm:px-6 rounded-2xl font-extrabold text-xl transition-all active:scale-95 ${blocoDigitado === b ? 'bg-[#1976FF] text-white shadow-lg' : temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border-2 border-gray-300 shadow-md hover:border-[#1976FF]'}`}>{b}</button>)}</div>}
               {!blocosEhLetras && <div className="grid grid-cols-3 gap-3">{['1','2','3','4','5','6','7','8','9'].map(n => <button key={n} onClick={() => { const next = blocoDigitado + n; setBlocoDigitado(next) }} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#1976FF]'}`}>{n}</button>)}<button onClick={voltar} className="h-14 rounded-xl text-sm font-semibold text-gray-600 bg-white border border-gray-200 active:scale-95 transition-all shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2"><ArrowLeft className="w-4 h-4" />Voltar</button><button onClick={() => { const next = blocoDigitado + '0'; setBlocoDigitado(next) }} className={`h-14 rounded-xl text-xl font-bold shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-800 border border-gray-300 shadow-md hover:border-[#1976FF]'}`}>0</button><button onClick={() => setBlocoDigitado(p => p.slice(0, -1))} className={`h-14 rounded-xl flex items-center justify-center shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 border border-white/20 hover:bg-white/20' : 'bg-white border border-gray-300 shadow-md hover:border-[#1976FF]'}`}><Delete className={`w-5 h-5 ${temaEscuro ? 'text-white' : 'text-gray-500'}`} /></button></div>}
               <div className="flex gap-3">
                 <button onClick={reiniciar} className={`h-12 px-5 rounded-xl font-semibold text-sm shadow-sm active:scale-95 transition-all ${temaEscuro ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>Cancelar</button>
